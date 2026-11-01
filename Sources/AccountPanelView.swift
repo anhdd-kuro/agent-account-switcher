@@ -528,7 +528,7 @@ final class AccountSwitcherPanelView: NSView {
         return usageCard(
             UsageCard(
                 title: account.email,
-                detail: planText(account.plan).replacingOccurrences(of: "ChatGPT ", with: ""),
+                detail: account.planLabel,
                 isActive: account.isActive,
                 needsLogin: needsLogin,
                 windows: (account.hasFiveHourLimit ? [
@@ -1229,11 +1229,6 @@ final class AccountSwitcherPanelView: NSView {
         account.fiveHourUsage == "Login expired" || account.weeklyUsage == "Login expired"
     }
 
-    private func planText(_ plan: String) -> String {
-        guard !plan.isEmpty else { return "ChatGPT" }
-        return "ChatGPT \(plan.prefix(1).uppercased())\(plan.dropFirst().lowercased())"
-    }
-
     private func percentText(_ percent: Int?) -> String {
         guard let percent else { return "--" }
         return "\(max(0, min(100, percent)))%"
@@ -1392,7 +1387,7 @@ extension AccountSwitcherPanelView {
             let card = usageCard(
                 UsageCard(
                     title: account.title,
-                    detail: account.email,
+                    detail: "\(account.planLabel) · \(account.email)",
                     isActive: account.isActive,
                     needsLogin: account.needsLogin,
                     windows: (account.hasFiveHourLimit ? [

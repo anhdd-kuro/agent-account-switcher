@@ -20,6 +20,22 @@ struct CodexAccount: Equatable {
     static func hasFiveHourLimit(plan: String, planType: String?) -> Bool {
         !(planType ?? plan).lowercased().contains("pro")
     }
+
+    var planLabel: String { Self.planLabel(plan: plan, planType: planType) }
+
+    /// Display name for the plan, e.g. "Pro", "Business · Premium" (`self_serve_business_prolite`).
+    static func planLabel(plan: String, planType: String?) -> String {
+        let known = [planType, plan].compactMap { $0?.lowercased() }.first { !$0.isEmpty && $0 != "unknown" }
+        guard let raw = known else { return "Unknown" }
+        if raw.contains("business") || raw.contains("team") || raw.contains("enterprise") {
+            let tier = raw.contains("enterprise") ? "Enterprise" : "Business"
+            return "\(tier) · \(raw.contains("pro") ? "Premium" : "Standard")"
+        }
+        switch raw {
+        case "prolite": return "Pro Lite"
+        default: return raw.prefix(1).uppercased() + raw.dropFirst()
+        }
+    }
 }
 
 struct HealthStatus {

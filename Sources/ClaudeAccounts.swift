@@ -13,8 +13,30 @@ struct ClaudeAccountSummary: Equatable {
     let needsLogin: Bool
     let usageError: String?
 
-    /// Team premium seats ("Claude Team 5x") only have a weekly limit; their 5-hour window is a placeholder.
-    var hasFiveHourLimit: Bool { true }
+    /// Verified Ultra (formerly Max 20x) accounts only have a weekly limit. Unverified ones get a temporary
+    /// 5-hour limit, so keep showing it while the API still reports usage in that window.
+    var hasFiveHourLimit: Bool {
+        Self.hasFiveHourLimit(plan: plan, fiveHourRemaining: fiveHourRemaining)
+    }
+
+    var planLabel: String { Self.planLabel(plan: plan) }
+
+    /// Display name for the plan: "Max 20x", "Team · Premium" (seat with an Nx tier), "Team · Standard".
+    static func planLabel(plan: String) -> String {
+        var label = plan.hasPrefix("Claude ") ? String(plan.dropFirst(7)) : plan
+        for org in ["Team", "Enterprise"] where label.hasPrefix(org) {
+            let isPremium = label.range(of: #"\d+x$"#, options: .regularExpression) != nil
+            label = "\(org) · \(isPremium ? "Premium" : "Standard")"
+        }
+        return label.isEmpty ? "Claude" : label
+    }
+
+    static func hasFiveHourLimit(plan: String, fiveHourRemaining: Int?) -> Bool {
+        let plan = plan.lowercased()
+        let isUltra = plan.contains("ultra") || (plan.contains("max") && plan.hasSuffix("20x"))
+        guard isUltra else { return true }
+        return (fiveHourRemaining ?? 100) < 100
+    }
 }
 
 struct ClaudeProfile {
