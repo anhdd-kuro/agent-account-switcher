@@ -14,6 +14,7 @@ struct InfrastructureTests {
         testProcessRunner()
         testLimitResetWatcher()
         testCursorUsageExport()
+        testClaudeResets()
 
         if failures.isEmpty {
             print("Infrastructure tests passed (\(assertionCount) assertions).")
@@ -69,6 +70,58 @@ struct InfrastructureTests {
         other.buckets[AnalyticsBucketKey(source: .codex, model: "gpt", halfHour: 1)] = AnalyticsBucket()
         other.replaceCursorUsage(records)
         expect(other.buckets.keys.contains { $0.source == .codex }, "other sources are never touched")
+    }
+
+    private static func testClaudeResets() {
+        let usage: [String: Any] = [
+            "five_hour": ["utilization": 9],
+            "cedar_ember": [
+                "eligible": true,
+                "grants": [
+                    ["id": "launch-2610-fable", "label": "One Fable reset", "resets_total": 1, "resets_left": 1,
+                     "ends_at": "2027-03-09T07:59:00+00:00", "clears": ["five_hour", "seven_day_overage_included"],
+                     "paused": false, "usable_now": true, "type": "full"],
+                    ["id": "used-up", "resets_left": 0, "usable_now": false],
+                    ["id": "paused-one", "resets_left": 2, "paused": true],
+                    ["id": "BAD ID", "resets_left": 1],
+                    ["id": "blocked", "resets_left": 2, "usable_now": false, "type": "session", "unavailable_reason": "cooldown"]
+                ]
+            ],
+            "juniper_tide": ["eligible": true, "available": true]
+        ]
+        let status = ClaudeResetStatus.parse(usage: usage)
+        expect(status?.eligible == true, "an eligible cedar block is eligible")
+        expect(status?.grants.map(\.id) == ["launch-2610-fable", "blocked", ClaudeResetGrant.fiveHourProgram], "used, paused and malformed grants are dropped; the 5-hour reset is added")
+        expect(status?.availableCount == 4, "available count sums resets left")
+        expect(status?.usableCount == 2, "usable count skips grants that cannot be used now")
+        let full = status?.grants.first
+        expect(full?.endsAt != nil && full?.kind == "full" && full?.usableNow == true, "grant fields parse")
+        expect(full?.clearedText == "5-hour + weekly", "clears are described without duplicates")
+        expect(status?.grants[1].unavailableText == "A reset was used recently", "unavailable reasons are described")
+
+        let ineligible = ClaudeResetStatus.parse(usage: ["cedar_ember": ["eligible": false, "ineligible_reason": "tier", "grants": []], "juniper_tide": NSNull()])
+        expect(ineligible?.eligible == false && ineligible?.grants.isEmpty == true && ineligible?.ineligibleReason == "tier", "ineligible accounts have no grants")
+        expect(ClaudeResetStatus.parse(usage: ["five_hour": [:]]) == nil, "no reset blocks yields nil")
+        let huge = ClaudeResetStatus.parse(usage: ["cedar_ember": ["eligible": true, "grants": [["id": "a", "resets_left": Int.max], ["id": "b", "resets_left": 1]]]])
+        expect(huge?.grants.map(\.id) == ["b"] && huge?.availableCount == 1, "absurd reset counts are dropped instead of overflowing")
+        expect(ClaudeResetStatus.parse(usage: ["cedar_ember": "garbage"]) == nil, "a malformed block yields nil")
+
+        let body = ClaudeResetAPI.claimBody(program: ClaudeResetGrant.grantProgram, grantID: "launch-2610-fable", requestID: "8D1C-aa_9")
+        expect(body?["grant_id"] == "launch-2610-fable" && body?["program"] == "cedar_ember" && body?["request_id"] == "8D1C-aa_9", "grant claims carry program, grant and request ids")
+        expect(ClaudeResetAPI.claimBody(program: ClaudeResetGrant.fiveHourProgram, grantID: ClaudeResetGrant.fiveHourProgram, requestID: "x") == ["program": "juniper_tide"], "the 5-hour reset claim sends the program only")
+        expect(ClaudeResetAPI.claimBody(program: "cedar_ember", grantID: "../x", requestID: "a") == nil, "malformed grant ids are refused")
+        expect(ClaudeResetAPI.claimBody(program: "other", grantID: "a", requestID: "a") == nil, "unknown programs are refused")
+        expect(ClaudeResetAPI.claimURL(organizationID: "1b2c-3d")?.absoluteString == "https://api.anthropic.com/api/organizations/1b2c-3d/reset_rate_limits", "claim URL uses the organization id")
+        expect(ClaudeResetAPI.claimURL(organizationID: "a/../b") == nil && ClaudeResetAPI.claimURL(organizationID: "") == nil, "unsafe organization ids are refused")
+
+        expect(ClaudeResetAPI.parseClaim(["result": "reset", "cleared": ["five_hour"]]) == .reset(confirmed: true, cleared: "5-hour"), "a reset result is confirmed")
+        expect(ClaudeResetAPI.parseClaim(["result": "reset", "reason": "reset_unconfirmed"]) == .reset(confirmed: false, cleared: ""), "an unconfirmed reset is pending")
+        if case .refused = ClaudeResetAPI.parseClaim(["result": "already_used"]) {} else { expect(false, "already used is refused") }
+        if case .refused = ClaudeResetAPI.parseClaim(["result": 3]) {} else { expect(false, "an unreadable result is refused") }
+
+        expect(ClaudeResetAPI.cliVersion(fromPath: "/x/versions/2.1.319") == "2.1.319", "CLI version comes from the versions path")
+        expect(ClaudeResetAPI.cliVersion(fromPath: "/usr/local/bin/claude") == ClaudeResetAPI.fallbackCLIVersion, "unknown paths fall back")
+        expect(ClaudeResetAPI.userAgent(version: "2.1.319") == "claude-cli/2.1.319 (external, cli)", "user agent matches Claude Code")
     }
 
     private static func testLimitResetWatcher() {

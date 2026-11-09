@@ -662,28 +662,114 @@ final class AccountSwitcherPanelView: NSView {
         body.addSubview(summary)
         y = summary.frame.maxY + 14
 
-        guard !accounts.isEmpty else { return y }
-        body.place(makeLabel("By account", size: 11, weight: .semibold, color: theme.secondaryText), x: inset + 4, y: y, width: 200)
-        y += 20
-
-        for account in orderedAccounts() {
-            let group = resetAccountGroup(account, theme: theme, y: y)
-            body.addSubview(group)
-            y = group.frame.maxY + 10
+        if !accounts.isEmpty {
+            body.place(makeLabel(claudeResetAccounts.isEmpty ? "By account" : "Codex", size: 11, weight: .semibold, color: theme.secondaryText), x: inset + 4, y: y, width: 200)
+            y += 20
+            for account in orderedAccounts() {
+                let group = resetAccountGroup(account, theme: theme, y: y)
+                body.addSubview(group)
+                y = group.frame.maxY + 10
+            }
+        }
+        if !claudeResetAccounts.isEmpty {
+            body.place(makeLabel("Claude", size: 11, weight: .semibold, color: theme.secondaryText), x: inset + 4, y: y, width: 200)
+            y += 20
+            for account in claudeResetAccounts {
+                let group = claudeResetGroup(account, theme: theme, y: y)
+                body.addSubview(group)
+                y = group.frame.maxY + 10
+            }
         }
         return y + 2
     }
 
+    /// Claude accounts, active first, that are signed in.
+    private var claudeResetAccounts: [ClaudeAccountSummary] {
+        claude.accounts.filter { !$0.needsLogin }.sorted { $0.isActive && !$1.isActive }
+    }
+
+    private func claudeResetGroup(_ account: ClaudeAccountSummary, theme: PanelTheme, y: CGFloat) -> NSView {
+        let grants = account.resets?.grants ?? []
+        let rowHeight: CGFloat = 40
+        let group = TileView(frame: NSRect(x: inset, y: y, width: contentWidth, height: rowHeight * CGFloat(1 + max(1, grants.count))), fill: theme.tileFill, border: theme.tileBorder)
+
+        let countText: String
+        if let resets = account.resets {
+            countText = account.isActive ? "Active · \(resets.availableCount)" : "\(resets.availableCount)"
+        } else {
+            countText = account.usageError != nil ? "Unavailable" : "Checking…"
+        }
+        let tag = CapsuleTagView(text: countText, theme: theme, foreground: theme.secondaryText, background: theme.controlFill)
+        group.place(tag, x: contentWidth - 12 - tag.frame.width, y: 11)
+        if account.isActive {
+            group.addSubview(DotView(frame: NSRect(x: 14, y: 17, width: 7, height: 7), color: theme.color(.green)))
+        }
+        let name = makeLabel("\(account.title) · \(account.email)", size: 12.5, weight: .semibold, color: theme.primaryText)
+        name.lineBreakMode = .byTruncatingTail
+        group.place(name, x: 28, y: 12, width: contentWidth - 28 - tag.frame.width - 22)
+
+        var rowY = rowHeight
+        group.addSubview(HairlineView(frame: NSRect(x: 12, y: rowY, width: contentWidth - 24, height: 0.5), color: theme.hairline))
+        guard account.resets != nil, !grants.isEmpty else {
+            let text: String
+            if account.resets == nil {
+                text = account.usageError.map { "Couldn’t check · \($0)" } ?? "Checking resets…"
+            } else {
+                text = "No resets available"
+            }
+            let label = makeLabel(text, size: 11.5, color: account.resets == nil && account.usageError != nil ? theme.text(.orange) : theme.secondaryText)
+            label.toolTip = account.resets?.ineligibleReason.map { "Not offered: \($0)" } ?? account.usageError
+            group.place(label, x: 12, y: rowY + 12, width: contentWidth - 24)
+            return group
+        }
+        for (index, grant) in grants.enumerated() {
+            if index > 0 {
+                group.addSubview(HairlineView(frame: NSRect(x: 12, y: rowY, width: contentWidth - 24, height: 0.5), color: theme.hairline))
+            }
+            let days = daysLeft(until: grant.endsAt)
+            let tone = days.map { urgencyTone(days: $0) } ?? .blue
+            let dueText = days.map { daysLeftText($0) } ?? (grant.program == ClaudeResetGrant.fiveHourProgram ? "1/week" : "no expiry")
+            let due = CapsuleTagView(text: dueText, theme: theme, foreground: theme.text(tone), background: theme.tint(tone), height: 20, fontSize: 11, fixedWidth: 64)
+            group.place(due, x: 12, y: rowY + 10)
+
+            let use = GlassButton(title: "Use", style: .use, theme: theme, height: 24, fontSize: 11.5, accessibilityLabel: "Use Claude \(grant.title) for \(account.title)") { [weak self] in
+                self?.claude.useReset(account.id, grant.id)
+            }
+            use.isEnabled = grant.usableNow && !claude.isClaimingReset && !claude.isSwitching
+            use.toolTip = grant.unavailableText ?? "Use this reset after confirmation"
+            let useX = contentWidth - 12 - use.frame.width
+            group.place(use, x: useX, y: rowY + 8)
+
+            var text = grant.title
+            if !grant.clearedText.isEmpty, !grant.title.lowercased().hasPrefix(grant.clearedText) {
+                text += " · \(grant.clearedText)"
+            }
+            if grant.resetsLeft > 1 { text += " · ×\(grant.resetsLeft)" }
+            if let unavailable = grant.unavailableText { text += " · \(unavailable)" }
+            let label = makeLabel(text, size: 12, color: grant.usableNow ? theme.primaryText : theme.secondaryText)
+            label.lineBreakMode = .byTruncatingTail
+            label.toolTip = [grant.label, grant.endsAt.map { "Use by \(DateFormatter.resetCreditDisplay.string(from: $0))" }]
+                .compactMap { $0?.isEmpty == false ? $0 : nil }.joined(separator: "\n")
+            group.place(label, x: 86, y: rowY + 12, width: useX - 96)
+            rowY += rowHeight
+        }
+        return group
+    }
+
     private func resetSummaryTile(theme: PanelTheme, y: CGFloat) -> NSView {
         let state = resetCreditsSummaryState()
-        let credits = accounts.flatMap { account in
-            resetCreditsByEmail[account.email].map { sortedAvailableResetCredits($0) } ?? []
+        let codexExpiries = accounts.flatMap { account in
+            (resetCreditsByEmail[account.email].map { sortedAvailableResetCredits($0) } ?? []).map(\.expiresAt)
         }
-        let days = credits.compactMap { resetCreditDaysLeft($0) }
+        let claudeExpiries = claudeResetAccounts.flatMap { account in
+            (account.resets?.grants ?? []).flatMap { Array(repeating: $0.endsAt, count: $0.resetsLeft) }
+        }
+        let expiries = codexExpiries + claudeExpiries
+        let days = expiries.compactMap { daysLeft(until: $0) }
         let urgent = days.filter { $0 <= 7 }.count
         let soon = days.filter { $0 > 7 && $0 <= 20 }.count
-        let later = credits.count - urgent - soon
-        let hasBreakdown = !credits.isEmpty
+        let later = expiries.count - urgent - soon
+        let hasBreakdown = !expiries.isEmpty
 
         let height: CGFloat = hasBreakdown ? 118 : 76
         let tile = TileView(frame: NSRect(x: inset, y: y, width: contentWidth, height: height), fill: theme.tileFill, border: theme.tileBorder)
@@ -693,15 +779,16 @@ final class AccountSwitcherPanelView: NSView {
         let count = makeLabel(countText, size: 34, weight: .semibold, color: theme.primaryText, monospacedDigits: true, kern: -1)
         tile.place(count, x: 13, y: 28)
         let accountsWithCredits = accounts.filter { (resetCreditsByEmail[$0.email]?.displayCount ?? 0) > 0 }.count
+            + claudeResetAccounts.filter { ($0.resets?.availableCount ?? 0) > 0 }.count
         let across = state.knownTotal == 0
             ? (state.hasError ? "some accounts could not be checked" : "none right now")
             : (accountsWithCredits == 1 ? "on 1 account" : "across \(accountsWithCredits) accounts")
         let acrossLabel = makeLabel(across, size: 12, color: theme.secondaryText)
         tile.place(acrossLabel, x: count.frame.maxX + 8, y: count.frame.maxY - acrossLabel.frame.height - 5, width: 170)
 
-        if let next = credits.min(by: { ($0.expiresAt ?? .distantFuture) < ($1.expiresAt ?? .distantFuture) }), let nextDays = resetCreditDaysLeft(next) {
+        if let next = expiries.compactMap({ $0 }).min(), let nextDays = daysLeft(until: next) {
             let tone = urgencyTone(days: nextDays)
-            let dateText = next.expiresAt.map { DateFormatter.resetCreditShortDate.string(from: $0) } ?? ""
+            let dateText = DateFormatter.resetCreditShortDate.string(from: next)
             let capsule = CapsuleTagView(text: "\(dateText) · \(daysLeftText(nextDays))", theme: theme, foreground: theme.text(tone), background: theme.tint(tone), height: 20, fontSize: 11)
             tile.place(capsule, x: contentWidth - 14 - capsule.frame.width, y: 38)
             let caption = makeLabel("Next expiry", size: 11, color: theme.secondaryText, alignment: .right)
@@ -796,7 +883,8 @@ final class AccountSwitcherPanelView: NSView {
         if state.hasError {
             return "Some accounts could not be checked"
         }
-        return "Reset credits for \(accounts.count == 1 ? "1 account" : "\(accounts.count) accounts")"
+        let count = accounts.count + claudeResetAccounts.count
+        return "Reset credits for \(count == 1 ? "1 account" : "\(count) accounts")"
     }
 
     private func urgencyTone(days: Int) -> PanelTheme.Tone {
@@ -815,8 +903,12 @@ final class AccountSwitcherPanelView: NSView {
     }
 
     private func resetCreditDaysLeft(_ credit: ResetCredit) -> Int? {
-        guard let expiresAt = credit.expiresAt else { return nil }
-        return max(0, Int(ceil(expiresAt.timeIntervalSince(Date()) / 86_400)))
+        daysLeft(until: credit.expiresAt)
+    }
+
+    private func daysLeft(until date: Date?) -> Int? {
+        guard let date else { return nil }
+        return max(0, Int(ceil(date.timeIntervalSince(Date()) / 86_400)))
     }
 
     private func sortedAvailableResetCredits(_ snapshot: ResetCreditsSnapshot) -> [ResetCredit] {
@@ -832,8 +924,9 @@ final class AccountSwitcherPanelView: NSView {
 
     private func resetCreditsSummaryState() -> (knownTotal: Int, knownAccounts: Int, hasError: Bool) {
         let snapshots = accounts.compactMap { resetCreditsByEmail[$0.email] }
-        let knownCounts = snapshots.compactMap { $0.displayCount }
-        return (knownCounts.reduce(0, +), knownCounts.count, snapshots.contains { $0.lastError != nil })
+        let knownCounts = snapshots.compactMap { $0.displayCount } + claudeResetAccounts.compactMap { $0.resets?.availableCount }
+        let claudeError = claudeResetAccounts.contains { $0.resets == nil && $0.usageError != nil }
+        return (knownCounts.reduce(0, +), knownCounts.count, claudeError || snapshots.contains { $0.lastError != nil })
     }
 
     // MARK: - Settings

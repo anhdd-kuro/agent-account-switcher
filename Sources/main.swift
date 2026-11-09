@@ -754,7 +754,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             String(describing: claude.accounts),
             String(describing: cursor.state),
             "\(analytics.period)|\(analytics.snapshot.map { "\($0.period)" } ?? "")|\(analytics.snapshot?.scannedAt.timeIntervalSince1970 ?? 0)|\(analytics.status.lastError ?? "")|\(analytics.snapshot == nil ? "\(analytics.status.isScanning)|\(analytics.status.processedBytes)" : "")",
-            "\(claude.isSwitching)|\(claude.lastError ?? "")|\(claude.updatedText)"
+            "\(claude.isSwitching)|\(claude.isClaimingReset)|\(claude.lastError ?? "")|\(claude.updatedText)"
         ].joined(separator: "\u{1E}")
     }
 
@@ -837,6 +837,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 },
                 remove: { [weak self] id in
                     self?.confirmRemoveClaudeAccount(id)
+                },
+                isClaimingReset: claude.isClaimingReset,
+                useReset: { [weak self] profileID, grantID in
+                    self?.confirmClaudeReset(profileID: profileID, grantID: grantID)
                 }
             ),
             codexUsageByEmail: directUsageSnapshotsByEmail,
@@ -1088,6 +1092,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         accountPanelMode = .resets
         refreshAccountPanelContentIfVisible()
         refreshResetCreditsIfNeeded(force: false)
+        claude.refreshIfNeeded(maximumAge: 60)
     }
 
     private func refreshResetCreditsIfNeeded(force: Bool) {
@@ -1651,6 +1656,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             for delay in [20.0, 45.0, 90.0, 180.0] {
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.claude.refresh() }
             }
+        }
+    }
+
+    private func confirmClaudeReset(profileID: String, grantID: String) {
+        guard let account = claude.accounts.first(where: { $0.id == profileID }),
+              let grant = account.resets?.grants.first(where: { $0.id == grantID }) else {
+            showAlert(title: "Reset unavailable", message: "This Claude reset is no longer listed. Refresh and try again.")
+            return
+        }
+        var details = [grant.label.isEmpty ? grant.title : grant.label]
+        if !grant.clearedText.isEmpty { details.append("Clears: \(grant.clearedText)") }
+        details.append("Resets left after this: \(max(0, grant.resetsLeft - 1))")
+        if let endsAt = grant.endsAt { details.append("Use by: \(DateFormatter.resetCreditDisplay.string(from: endsAt))") }
+        let alert = NSAlert()
+        alert.messageText = "Use a Claude \(grant.title.lowercased()) for \(account.title)?"
+        alert.informativeText = "This spends one reset for \(account.email).\n\n" + details.joined(separator: "\n")
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Use Reset")
+        alert.addButton(withTitle: "Cancel")
+        closeAccountPanel()
+        guard alert.runAbovePanel() == .alertFirstButtonReturn else { return }
+
+        let generation = beginStatusAnimation(title: "Resetting")
+        claude.claimReset(profileID: profileID, grantID: grantID) { [weak self] result in
+            guard let self else { return }
+            self.endStatusAnimation(expectedGeneration: generation)
+            switch result {
+            case .success(.reset(let confirmed, let cleared)):
+                let what = cleared.isEmpty ? "Limits" : "\(cleared) limits"
+                let message = confirmed
+                    ? "\(what) for \(account.title) were reset."
+                    : "Anthropic accepted the reset for \(account.title) but has not confirmed it yet. If your limits aren't refilled in a few minutes, refresh."
+                self.sendNotification(title: confirmed ? "Claude reset used" : "Claude reset pending", subtitle: account.title, body: message)
+                self.showAlert(title: confirmed ? "Reset confirmed" : "Reset pending", message: message)
+            case .success(.refused(let reason)):
+                self.showAlert(title: "Reset not used", message: reason)
+            case .failure(let error):
+                self.showAlert(title: "Reset failed", message: error.localizedDescription)
+            }
+            self.refreshUI()
         }
     }
 

@@ -12,6 +12,7 @@ struct ClaudeAccountSummary: Equatable {
     let isActive: Bool
     let needsLogin: Bool
     let usageError: String?
+    var resets: ClaudeResetStatus? = nil
 
     /// Verified Ultra (formerly Max 20x) accounts only have a weekly limit. Unverified ones get a temporary
     /// 5-hour limit, so keep showing it while the API still reports usage in that window.
@@ -185,9 +186,11 @@ enum ClaudeAccountStore {
     static let backupServicePrefix = "claude-switcher:"
     private static let clientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
     private static let tokenURL = URL(string: "https://platform.claude.com/v1/oauth/token")!
-    private static let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
+    private static let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage?\(ClaudeResetAPI.usageQuery)")!
     private static let profileURL = URL(string: "https://api.anthropic.com/api/oauth/profile")!
-    private static let lock = NSRecursiveLock()
+    static let lock = NSRecursiveLock()
+    /// Claude Code's version, sent in the headers Anthropic uses to decide reset eligibility.
+    static let cliVersion: String = ClaudeResetAPI.cliVersion(fromPath: claudeExecutable().map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path } ?? "")
 
     private static var home: URL { FileManager.default.homeDirectoryForCurrentUser }
     static var claudeStateURL: URL { home.appendingPathComponent(".claude.json") }
@@ -282,7 +285,7 @@ enum ClaudeAccountStore {
         }
     }
 
-    private static func parseCredentials(_ text: String?) -> [String: Any]? {
+    static func parseCredentials(_ text: String?) -> [String: Any]? {
         guard let text, let data = text.data(using: .utf8) else { return nil }
         return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
     }
@@ -293,11 +296,11 @@ enum ClaudeAccountStore {
         return text
     }
 
-    private static func oauth(_ credentials: [String: Any]?) -> [String: Any]? {
+    static func oauth(_ credentials: [String: Any]?) -> [String: Any]? {
         credentials?["claudeAiOauth"] as? [String: Any]
     }
 
-    private static func liveIdentity() -> String? {
+    static func liveIdentity() -> String? {
         guard let account = readOAuthAccount(), let email = account["emailAddress"] as? String, !email.isEmpty else { return nil }
         return ClaudeProfile.identity(email: email, organizationID: account["organizationUuid"] as? String ?? "")
     }
@@ -532,7 +535,8 @@ enum ClaudeAccountStore {
             weeklyResetAt: weekly.1,
             isActive: isActive,
             needsLogin: needsLogin,
-            usageError: error
+            usageError: error,
+            resets: usage.flatMap(ClaudeResetStatus.parse(usage:))
         )
     }
 
@@ -546,7 +550,7 @@ enum ClaudeAccountStore {
         return plan
     }
 
-    private static func isExpired(_ credentials: [String: Any]) -> Bool {
+    static func isExpired(_ credentials: [String: Any]) -> Bool {
         guard let expiresAt = (credentials["expiresAt"] as? NSNumber)?.doubleValue else { return false }
         return Date(timeIntervalSince1970: expiresAt / 1000) < Date().addingTimeInterval(120)
     }
@@ -558,7 +562,7 @@ enum ClaudeAccountStore {
         return fractional.date(from: text) ?? plain.date(from: text)
     }
 
-    private struct Failure: Error {
+    struct Failure: Error {
         let status: Int?
         let message: String
         var isInvalidGrant: Bool { status == 400 || status == 401 }
@@ -570,7 +574,7 @@ enum ClaudeAccountStore {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("claude-code/2.1", forHTTPHeaderField: "User-Agent")
+        applyClaudeCodeHeaders(to: &request)
         do {
             let payload = try await CodexHTTPClient.send(request, retries: 1)
             guard payload.statusCode == 200 else {
@@ -586,9 +590,14 @@ enum ClaudeAccountStore {
         }
     }
 
+    static func applyClaudeCodeHeaders(to request: inout URLRequest) {
+        request.setValue(ClaudeResetAPI.userAgent(version: cliVersion), forHTTPHeaderField: "User-Agent")
+        request.setValue("cli", forHTTPHeaderField: "x-app")
+    }
+
     /// Refreshes an inactive profile's token. The refresh token rotates, so the new
     /// credentials are saved before anything else can use the old ones.
-    private static func refreshed(_ credentials: [String: Any], profile: ClaudeProfile) async -> Result<[String: Any], Failure> {
+    static func refreshed(_ credentials: [String: Any], profile: ClaudeProfile) async -> Result<[String: Any], Failure> {
         guard let refreshToken = credentials["refreshToken"] as? String else {
             return .failure(Failure(status: 400, message: "Session expired"))
         }
@@ -674,6 +683,9 @@ struct ClaudePanelModel {
     let switchAccount: (String) -> Void
     let signIn: (String?) -> Void
     let remove: (String) -> Void
+    var isClaimingReset = false
+    /// Profile id, grant id.
+    var useReset: (String, String) -> Void = { _, _ in }
 
     static let empty = ClaudePanelModel(accounts: [], lastError: nil, updatedText: "never", isSwitching: false, switchAccount: { _ in }, signIn: { _ in }, remove: { _ in })
 
@@ -685,10 +697,14 @@ final class ClaudeController {
     private(set) var lastError: String?
     private(set) var lastUpdatedAt: Date?
     private(set) var isSwitching = false
-    private var isRefreshing = false
+    var isClaimingReset = false
+    private(set) var isRefreshing = false
     private var pendingRefresh = false
     private var lastRefreshStartedAt: Date?
     private var pendingSwitch: (id: String, completion: (String?) -> Void)?
+    /// Request ids of claims whose outcome is unknown, keyed by profile, grant and resets left.
+    /// A retry reuses the id so Anthropic does not spend a second reset.
+    var resetRequestIDs: [String: String] = [:]
     private let refreshInterval: TimeInterval = 90
     var onChange: (() -> Void)?
     var isEnabled = true
@@ -710,7 +726,7 @@ final class ClaudeController {
     }
 
     func refresh() {
-        guard isEnabled, !isSwitching else { return }
+        guard isEnabled, !isSwitching, !isClaimingReset else { return }
         guard !isRefreshing else {
             pendingRefresh = true
             return
@@ -734,7 +750,8 @@ final class ClaudeController {
                 id: summary.id, title: summary.title, email: summary.email, plan: summary.plan,
                 fiveHourRemaining: old.fiveHourRemaining, weeklyRemaining: old.weeklyRemaining,
                 fiveHourResetAt: old.fiveHourResetAt, weeklyResetAt: old.weeklyResetAt,
-                isActive: summary.isActive, needsLogin: false, usageError: summary.usageError
+                isActive: summary.isActive, needsLogin: false, usageError: summary.usageError,
+                resets: summary.resets ?? old.resets
             )
         }
         lastError = ClaudeAccountStore.claudeExecutable() == nil && accounts.isEmpty ? "Claude Code CLI not found" : nil
@@ -760,6 +777,7 @@ final class ClaudeController {
     func switchTo(_ id: String, completion: @escaping (String?) -> Void) {
         guard isEnabled else { return completion("Claude switching is disabled in demo mode.") }
         guard !isSwitching, pendingSwitch == nil else { return completion("Another Claude switch is already in progress.") }
+        guard !isClaimingReset else { return completion("Wait for the Claude reset to finish, then switch.") }
         guard !isRefreshing else {
             pendingSwitch = (id, completion)
             return
@@ -783,7 +801,8 @@ final class ClaudeController {
                             id: account.id, title: account.title, email: account.email, plan: account.plan,
                             fiveHourRemaining: account.fiveHourRemaining, weeklyRemaining: account.weeklyRemaining,
                             fiveHourResetAt: account.fiveHourResetAt, weeklyResetAt: account.weeklyResetAt,
-                            isActive: account.id == id, needsLogin: account.needsLogin, usageError: account.usageError
+                            isActive: account.id == id, needsLogin: account.needsLogin, usageError: account.usageError,
+                            resets: account.resets
                         )
                     }
                 }

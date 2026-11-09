@@ -25,6 +25,7 @@ Terms used in this repo and where they live. Read this before choosing where a c
 | Plan type | `plan_type` in the Codex usage response; the source of truth for `hasFiveHourLimit`. |
 | Premium seat | A Team or Business seat with larger limits ("Claude Team 5x", prolite). |
 | Reset credit | A redeemable token that resets Codex limits early; the Resets tab verifies redemption. |
+| Claude reset | A Claude limit reset (full, 5-hour or weekly) from Anthropic's `cedar_ember` grants or the weekly `juniper_tide` 5-hour reset; listed and used from the Resets tab. `ClaudeResets.swift`. |
 | Cursor lane | One of Cursor's three monthly meters: Auto and API. All share the billing-cycle reset. |
 | Menu-bar lane | Which Cursor lane (or Off) the status item shows. |
 
