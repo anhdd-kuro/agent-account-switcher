@@ -494,11 +494,11 @@ enum ClaudeAccountStore {
             }
         }
         if let token = credentials?["accessToken"] as? String, !needsLogin {
-            var result = await fetchUsage(token: token)
+            var result = await fetchUsage(token: token, key: profile.id)
             if case .failure(let failure) = result, failure.status == 401, canRefresh, let current = credentials {
                 switch await refreshed(current, profile: profile) {
                 case .success(let updated):
-                    if let newToken = updated["accessToken"] as? String { result = await fetchUsage(token: newToken) }
+                    if let newToken = updated["accessToken"] as? String { result = await fetchUsage(token: newToken, key: profile.id) }
                 case .failure(let refreshFailure):
                     needsLogin = refreshFailure.isInvalidGrant
                 }
@@ -565,10 +565,42 @@ enum ClaudeAccountStore {
     struct Failure: Error {
         let status: Int?
         let message: String
+        var retryAfter: TimeInterval? = nil
         var isInvalidGrant: Bool { status == 400 || status == 401 }
     }
 
-    private static func fetchUsage(token: String) async -> Result<[String: Any], Failure> {
+    private static let backoffLock = NSLock()
+    nonisolated(unsafe) private static var usageBackoff = RateLimitBackoff()
+
+    private static func rateLimitedFailure(until date: Date) -> Failure {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        formatter.dateStyle = .none
+        return Failure(status: 429, message: "Usage is rate limited; retrying at \(formatter.string(from: date))")
+    }
+
+    /// Skips the request while `key` is cooling down after a 429, so polling stops
+    /// hammering the endpoint and the limit can clear.
+    private static func fetchUsage(token: String, key: String) async -> Result<[String: Any], Failure> {
+        if let retryAt = backoffLock.withLock({ usageBackoff.retryAt(key) }) {
+            return .failure(rateLimitedFailure(until: retryAt))
+        }
+        let result = await requestUsage(token: token)
+        switch result {
+        case .success:
+            backoffLock.withLock { usageBackoff.recordSuccess(key) }
+            return result
+        case .failure(let failure) where failure.status == 429:
+            let retryAt = backoffLock.withLock {
+                usageBackoff.recordLimited(key, retryAfter: failure.retryAfter)
+            }
+            return .failure(rateLimitedFailure(until: retryAt))
+        case .failure:
+            return result
+        }
+    }
+
+    private static func requestUsage(token: String) async -> Result<[String: Any], Failure> {
         var request = URLRequest(url: usageURL)
         request.timeoutInterval = 12
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -578,8 +610,11 @@ enum ClaudeAccountStore {
         do {
             let payload = try await CodexHTTPClient.send(request, retries: 1)
             guard payload.statusCode == 200 else {
-                let message = payload.statusCode == 429 ? "Usage is rate limited; retrying later" : "Usage returned \(payload.statusCode)"
-                return .failure(Failure(status: payload.statusCode, message: message))
+                return .failure(Failure(
+                    status: payload.statusCode,
+                    message: "Usage returned \(payload.statusCode)",
+                    retryAfter: RateLimitBackoff.parseRetryAfter(payload.retryAfter)
+                ))
             }
             guard let object = try JSONSerialization.jsonObject(with: payload.data) as? [String: Any] else {
                 return .failure(Failure(status: nil, message: "Usage response was unreadable"))
@@ -743,7 +778,9 @@ final class ClaudeController {
     private func apply(_ summaries: [ClaudeAccountSummary]) {
         let previous = Dictionary(accounts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         accounts = summaries.map { summary in
-            guard summary.usageError != nil, !summary.needsLogin, let old = previous[summary.id], old.fiveHourRemaining != nil else {
+            // Keep the last reading on a failed fetch. Max 20x/Ultra has no 5-hour value, so weekly alone counts.
+            guard summary.usageError != nil, !summary.needsLogin, let old = previous[summary.id],
+                  old.fiveHourRemaining != nil || old.weeklyRemaining != nil else {
                 return summary
             }
             return ClaudeAccountSummary(

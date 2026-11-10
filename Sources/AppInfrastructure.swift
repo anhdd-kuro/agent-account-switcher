@@ -191,6 +191,51 @@ enum AuthBackupPruner {
 struct HTTPPayload {
     let data: Data
     let statusCode: Int
+    var retryAfter: String? = nil
+}
+
+/// Per-key cooldown after HTTP 429: doubles from 2 minutes up to 30, and never
+/// retries earlier than the server's Retry-After.
+struct RateLimitBackoff {
+    static let initialDelay: TimeInterval = 120
+    static let maximumDelay: TimeInterval = 1_800
+
+    private var until: [String: Date] = [:]
+    private var strikes: [String: Int] = [:]
+
+    /// The time the key may be fetched again, or nil when it is free now.
+    func retryAt(_ key: String, now: Date = Date()) -> Date? {
+        guard let date = until[key], date > now else { return nil }
+        return date
+    }
+
+    @discardableResult
+    mutating func recordLimited(_ key: String, retryAfter: TimeInterval?, now: Date = Date()) -> Date {
+        let count = (strikes[key] ?? 0) + 1
+        strikes[key] = count
+        let doubled = Self.initialDelay * pow(2, Double(min(count - 1, 10)))
+        let delay = max(min(doubled, Self.maximumDelay), retryAfter ?? 0)
+        let date = now.addingTimeInterval(delay)
+        until[key] = date
+        return date
+    }
+
+    mutating func recordSuccess(_ key: String) {
+        until[key] = nil
+        strikes[key] = nil
+    }
+
+    /// Reads a Retry-After value given in seconds or as an HTTP date.
+    static func parseRetryAfter(_ value: String?, now: Date = Date()) -> TimeInterval? {
+        guard let value = value?.trimmingCharacters(in: .whitespaces), !value.isEmpty else { return nil }
+        if let seconds = TimeInterval(value), seconds >= 0 { return seconds }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "GMT")
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        guard let date = formatter.date(from: value) else { return nil }
+        return max(0, date.timeIntervalSince(now))
+    }
 }
 
 enum CodexHTTPClient {
@@ -221,7 +266,11 @@ enum CodexHTTPClient {
                     try await Task.sleep(nanoseconds: UInt64(250_000_000 * (attempt + 1)))
                     continue
                 }
-                return HTTPPayload(data: data, statusCode: httpResponse.statusCode)
+                return HTTPPayload(
+                    data: data,
+                    statusCode: httpResponse.statusCode,
+                    retryAfter: httpResponse.value(forHTTPHeaderField: "Retry-After")
+                )
             } catch {
                 lastError = error
                 guard attempt + 1 < attempts else { break }

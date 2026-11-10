@@ -8,6 +8,7 @@ struct InfrastructureTests {
     static func main() throws {
         testResetRefreshPolicy()
         testUsageRefreshPolicy()
+        testRateLimitBackoff()
         testLastKnownGoodSnapshotPolicy()
         try testComputerUsePluginDiscovery()
         try testBackupPruning()
@@ -161,6 +162,36 @@ struct InfrastructureTests {
         expect(!UsageRefreshPolicy.shouldRefresh(lastRefresh: now.addingTimeInterval(-29), now: now, ttl: 30, force: false), "fresh usage snapshot should stay cached")
         expect(UsageRefreshPolicy.shouldRefresh(lastRefresh: now.addingTimeInterval(-30), now: now, ttl: 30, force: false), "expired usage snapshot should refresh")
         expect(UsageRefreshPolicy.shouldRefresh(lastRefresh: now, now: now, ttl: 30, force: true), "forced usage refresh should bypass cache")
+    }
+
+    private static func testRateLimitBackoff() {
+        let now = Date(timeIntervalSince1970: 10_000)
+        var backoff = RateLimitBackoff()
+        expect(backoff.retryAt("a", now: now) == nil, "an unseen key is not cooling down")
+
+        let first = backoff.recordLimited("a", retryAfter: nil, now: now)
+        expect(first == now.addingTimeInterval(120), "the first 429 without Retry-After waits 2 minutes")
+        expect(backoff.retryAt("a", now: now.addingTimeInterval(60)) == first, "the key stays blocked until the retry time")
+        expect(backoff.retryAt("a", now: now.addingTimeInterval(120)) == nil, "the key is free at the retry time")
+        expect(backoff.retryAt("b", now: now) == nil, "other keys are unaffected")
+
+        let second = backoff.recordLimited("a", retryAfter: nil, now: now)
+        expect(second == now.addingTimeInterval(240), "repeated 429s double the wait")
+        for _ in 0..<10 { _ = backoff.recordLimited("a", retryAfter: nil, now: now) }
+        expect(backoff.retryAt("a", now: now) == now.addingTimeInterval(1_800), "the wait is capped at 30 minutes")
+
+        let honored = backoff.recordLimited("c", retryAfter: 600, now: now)
+        expect(honored == now.addingTimeInterval(600), "Retry-After longer than the backoff is honored")
+
+        backoff.recordSuccess("a")
+        expect(backoff.retryAt("a", now: now) == nil, "success clears the cooldown")
+        expect(backoff.recordLimited("a", retryAfter: nil, now: now) == now.addingTimeInterval(120), "success resets the doubling")
+
+        expect(RateLimitBackoff.parseRetryAfter("90", now: now) == 90, "Retry-After seconds parse")
+        let httpDate = RateLimitBackoff.parseRetryAfter("Thu, 01 Jan 1970 03:00:00 GMT", now: now)
+        expect(httpDate == 800, "Retry-After HTTP dates parse relative to now")
+        expect(RateLimitBackoff.parseRetryAfter("soon", now: now) == nil, "an unreadable Retry-After is ignored")
+        expect(RateLimitBackoff.parseRetryAfter(nil, now: now) == nil, "a missing Retry-After is ignored")
     }
 
     private static func testLastKnownGoodSnapshotPolicy() {
