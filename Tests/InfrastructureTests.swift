@@ -16,6 +16,10 @@ struct InfrastructureTests {
         testLimitResetWatcher()
         testCursorUsageExport()
         testClaudeResets()
+        testCodexAuthListJSON()
+        testAccessTokenClaims()
+        testAuthSnapshotSync()
+        testClaudeLoginPolicy()
 
         if failures.isEmpty {
             print("Infrastructure tests passed (\(assertionCount) assertions).")
@@ -141,6 +145,72 @@ struct InfrastructureTests {
         var independent = LimitResetWatcher()
         _ = independent.observe([limit(10, key: "a"), limit(10, key: "b")])
         expect(independent.observe([limit(100, key: "a"), limit(10, key: "b")]).map(\.key) == ["a"], "windows are tracked independently")
+    }
+
+    private static func jwt(_ claims: [String: Any]) -> String {
+        let body = (try? JSONSerialization.data(withJSONObject: claims)) ?? Data()
+        let encoded = body.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        return "header.\(encoded).signature"
+    }
+
+    private static func testCodexAuthListJSON() {
+        let document = """
+        {"schema_version":1,"command":"list","active_account_key":"k2","accounts":[
+          {"number":1,"account_key":"k1","email":"one@example.com","plan":"plus","active":false,
+           "usage":{"primary":{"used_percent":0,"window_minutes":300,"resets_at":1794371372}}},
+          {"number":2,"account_key":"k2","email":"two@example.com","plan":"unknown","active":true,"usage":null},
+          {"number":3,"plan":"plus","active":false}
+        ]}
+        """
+        let entries = CodexAuthListJSON.parse(document)
+        expect(entries?.count == 2, "rows without an email are skipped")
+        expect(entries?.first == CodexAuthListEntry(selector: "01", email: "one@example.com", plan: "Plus", isActive: false), "first row is read with a padded selector and capitalized plan")
+        expect(entries?.last?.isActive == true && entries?.last?.plan == "Unknown", "active flag and unknown plan are read")
+        expect(CodexAuthListJSON.parse(#"{"schema_version":1,"error":{"code":"usage","message":"unknown flag"}}"#) == nil, "an error document is not a listing")
+        expect(CodexAuthListJSON.parse("  ACCOUNT  PLAN\n01 one@example.com Plus") == nil, "table output is not a listing")
+        expect(CodexAuthListJSON.parse(#"{"command":"list","accounts":[]}"#)?.isEmpty == true, "an empty listing is still a listing")
+    }
+
+    private static func testAccessTokenClaims() {
+        let now = Date(timeIntervalSince1970: 2_000)
+        let token = jwt(["exp": 2_500, "https://api.openai.com/auth": ["chatgpt_user_id": "user-1", "chatgpt_account_id": "acct-1"]])
+        expect(AccessTokenClaims.expiry(of: token) == Date(timeIntervalSince1970: 2_500), "expiry is read from the exp claim")
+        expect(AccessTokenClaims.userID(of: token) == "user-1", "user id is read from the auth claim")
+        expect(!AccessTokenClaims.isExpired(token, now: now), "a token before exp is usable")
+        expect(AccessTokenClaims.isExpired(token, now: Date(timeIntervalSince1970: 2_500)), "a token at exp is expired")
+        expect(!AccessTokenClaims.isExpired("opaque-token", now: now), "a token without a readable exp is not assumed expired")
+        expect(AccessTokenClaims.expiry(of: "a.%%%.c") == nil, "a corrupt payload has no expiry")
+    }
+
+    private static func testAuthSnapshotSync() {
+        func auth(account: String, user: String, refresh: String, access: String? = nil) -> [String: Any] {
+            let claims: [String: Any] = ["exp": 9, "https://api.openai.com/auth": ["chatgpt_user_id": user]]
+            return ["tokens": ["account_id": account, "refresh_token": refresh, "access_token": access ?? jwt(claims.merging(["jti": refresh]) { $1 })]]
+        }
+        let live = auth(account: "acct-1", user: "user-1", refresh: "r2")
+        expect(AuthSnapshotSync.decision(live: live, snapshot: auth(account: "acct-1", user: "user-1", refresh: "r1"), expectedAccountID: "acct-1", expectedUserID: "user-1") == .copy, "rotated tokens are saved")
+        expect(AuthSnapshotSync.decision(live: live, snapshot: nil, expectedAccountID: "acct-1", expectedUserID: "user-1") == .copy, "a missing snapshot is created")
+        expect(AuthSnapshotSync.decision(live: live, snapshot: live, expectedAccountID: "acct-1", expectedUserID: "user-1") == .unchanged, "identical tokens are not rewritten")
+        expect(AuthSnapshotSync.decision(live: live, snapshot: nil, expectedAccountID: "acct-2", expectedUserID: "user-1") == .mismatch, "another workspace's login is never saved over this account")
+        expect(AuthSnapshotSync.decision(live: live, snapshot: nil, expectedAccountID: "acct-1", expectedUserID: "user-2") == .mismatch, "another user's login is never saved over this account")
+        expect(AuthSnapshotSync.decision(live: live, snapshot: nil, expectedAccountID: "acct-1", expectedUserID: nil) == .copy, "an unknown user id falls back to the account id")
+        expect(AuthSnapshotSync.decision(live: ["tokens": [:]], snapshot: nil, expectedAccountID: "acct-1", expectedUserID: nil) == .mismatch, "a login without an account id is not saved")
+        expect(AuthSnapshotSync.decision(live: ["tokens": ["account_id": "acct-1"]], snapshot: live, expectedAccountID: "acct-1", expectedUserID: nil) == .mismatch, "a login without tokens never replaces a saved one")
+        expect(AuthSnapshotSync.decision(live: ["tokens": ["account_id": "acct-1", "access_token": "opaque", "refresh_token": "r3"]], snapshot: live, expectedAccountID: "acct-1", expectedUserID: "user-1") == .mismatch, "a token whose user cannot be read is not saved over a known user")
+        expect(AuthSnapshotSync.decision(live: nil, snapshot: nil, expectedAccountID: "acct-1", expectedUserID: nil) == .mismatch, "an unreadable login is not saved")
+    }
+
+    private static func testClaudeLoginPolicy() {
+        expect(ClaudeLoginPolicy.waitsForOwner(tokenExpired: true, canRefresh: false), "an expired login owned by Claude Code is waited on, not fetched")
+        expect(!ClaudeLoginPolicy.waitsForOwner(tokenExpired: true, canRefresh: true), "an expired inactive login is refreshed here")
+        expect(!ClaudeLoginPolicy.waitsForOwner(tokenExpired: false, canRefresh: false), "a valid login is fetched")
+        expect(!ClaudeLoginPolicy.needsLogin(afterRejection: .notAllowed), "a rejected login owned by Claude Code is not reported as signed out")
+        expect(!ClaudeLoginPolicy.needsLogin(afterRejection: .failed(invalidGrant: false)), "a refresh that failed for another reason is not a sign-out")
+        expect(ClaudeLoginPolicy.needsLogin(afterRejection: .failed(invalidGrant: true)), "a rejected refresh token needs a new login")
+        expect(ClaudeLoginPolicy.needsLogin(afterRejection: .refreshedButStillRejected), "a fresh token that is still rejected needs a new login")
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {

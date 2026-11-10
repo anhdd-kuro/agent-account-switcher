@@ -518,14 +518,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             refreshUI()
         }
         DispatchQueue.global(qos: .utility).async {
-            var result = self.runCodexAuth(force ? ["list", "--debug"] : ["list"])
-            var usedSkipAPI = false
-            if result.status != 0 {
-                result = self.runCodexAuth(["list", "--skip-api"])
-                usedSkipAPI = result.status == 0
-            }
-            let parsed = result.status == 0 ? self.parseAccounts(result.output, usageIsLive: !usedSkipAPI) : []
-            let completedResult = result
+            let (completedResult, parsed) = self.listCodexAccounts()
             Task {
                 async let resetTask = self.fetchResetCreditsForRefresh(
                     accounts: parsed,
@@ -2512,9 +2505,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     private func verifyActiveAccount(expectedEmail: String) -> CommandResult {
         for attempt in 1...3 {
-            let result = runCodexAuth(["list", "--skip-api"])
+            let (result, parsed) = listCodexAccounts()
             if result.status == 0 {
-                let parsed = parseAccounts(result.output, usageIsLive: false)
                 if parsed.contains(where: { $0.isActive && $0.email.caseInsensitiveCompare(expectedEmail) == .orderedSame }) {
                     return CommandResult(status: 0, output: "active account verified")
                 }
@@ -3048,6 +3040,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                   let activeKey = json["active_account_key"] as? String else {
                 return "Could not read active_account_key from registry.json."
             }
+            let activeEntry = (json["accounts"] as? [[String: Any]])?.first { $0["account_key"] as? String == activeKey }
 
             let encoded = Data(activeKey.utf8).base64EncodedString().replacingOccurrences(of: "=", with: "")
             let accountAuthURL = URL(fileURLWithPath: "\(home)/.codex/accounts/\(encoded).auth.json")
@@ -3058,14 +3051,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 return nil
             }
 
+            // Another Codex client may have signed auth.json in to a different account, or left the
+            // tokens untouched: only a changed login of the active account is saved over its snapshot.
+            let liveData = try Data(contentsOf: activeAuthURL)
+            func object(_ data: Data?) -> [String: Any]? {
+                data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            }
+            guard AuthSnapshotSync.decision(
+                live: object(liveData),
+                snapshot: object(try? Data(contentsOf: accountAuthURL)),
+                expectedAccountID: activeEntry?["chatgpt_account_id"] as? String,
+                expectedUserID: activeEntry?["chatgpt_user_id"] as? String
+            ) == .copy else {
+                return nil
+            }
+
             let backupURL = accountAuthURL.deletingLastPathComponent().appendingPathComponent(
                 accountAuthURL.lastPathComponent + ".bak.\(Int(Date().timeIntervalSince1970))"
             )
+            let temporaryURL = accountAuthURL.deletingLastPathComponent().appendingPathComponent(".\(UUID().uuidString).auth.tmp")
+            defer { try? FileManager.default.removeItem(at: temporaryURL) }
+            try liveData.write(to: temporaryURL, options: .withoutOverwriting)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporaryURL.path)
             if FileManager.default.fileExists(atPath: accountAuthURL.path) {
                 try? FileManager.default.copyItem(at: accountAuthURL, to: backupURL)
-                try FileManager.default.removeItem(at: accountAuthURL)
+                _ = try FileManager.default.replaceItemAt(accountAuthURL, withItemAt: temporaryURL)
+            } else {
+                try FileManager.default.moveItem(at: temporaryURL, to: accountAuthURL)
             }
-            try FileManager.default.copyItem(at: activeAuthURL, to: accountAuthURL)
             _ = AuthBackupPruner.prune(in: accountAuthURL.deletingLastPathComponent(), keepingPerAccount: 10)
             return nil
         } catch {
@@ -3236,6 +3249,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             .split(whereSeparator: \.isNewline)
             .map(String.init)
             .filter { !$0.isEmpty }
+    }
+
+    /// Lists accounts without letting codex-auth call ChatGPT: usage comes from the
+    /// app's own fetch, so the poll adds no extra requests on the account's token.
+    private func listCodexAccounts() -> (result: CommandResult, accounts: [CodexAccount]) {
+        let json = runCodexAuth(["list", "--skip-api", "--json"])
+        if json.status == 0, let entries = CodexAuthListJSON.parse(json.output) {
+            let accounts = entries.map { entry in
+                CodexAccount(
+                    selector: entry.selector,
+                    email: entry.email,
+                    plan: entry.plan,
+                    fiveHourUsage: "-",
+                    weeklyUsage: "-",
+                    fiveHourUsedPercent: nil,
+                    weeklyUsedPercent: nil,
+                    lastActivity: "-",
+                    isActive: entry.isActive
+                )
+            }
+            return (json, accounts)
+        }
+        // codex-auth without `--json`: its table still carries email, plan and the active mark.
+        let table = runCodexAuth(["list", "--skip-api"])
+        return (table, table.status == 0 ? parseAccounts(table.output, usageIsLive: false) : [])
     }
 
     private func parseAccounts(_ output: String, usageIsLive: Bool = true) -> [CodexAccount] {
@@ -3417,7 +3455,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let refreshed = await withTaskGroup(of: (String, DirectUsageSnapshot)?.self) { group in
             for account in accounts {
                 group.addTask {
-                    guard case .success(let auth) = self.savedAuth(forEmail: account.email) else { return nil }
+                    // An expired token is renewed by Codex when the account is next used; sending it only earns a 401.
+                    guard case .success(let auth) = self.savedAuth(forEmail: account.email),
+                          !AccessTokenClaims.isExpired(auth.accessToken) else { return nil }
                     guard case .success(let usage) = await self.fetchDirectUsage(using: auth) else { return nil }
                     return (account.email, usage)
                 }
@@ -3600,6 +3640,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     group.addTask {
                         let snapshot: ResetCreditsSnapshot
                         switch self.savedAuth(forEmail: account.email) {
+                        case .success(let auth) where AccessTokenClaims.isExpired(auth.accessToken):
+                            snapshot = ResetCreditsSnapshot(availableCount: nil, credits: [], lastUpdatedText: "never", lastError: "session token expired; Codex renews it when this account is next used")
                         case .success(let auth):
                             switch await self.fetchResetCredits(using: auth) {
                             case .success(let fetched):
@@ -3749,12 +3791,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return .failure("saved account registry was not readable")
         }
 
-        guard let authURL = authFileURL(forAccountID: expectedAccountID, root: root) else {
-            return .failure("saved account auth file was not found")
+        // Codex rotates the tokens in auth.json; the snapshot under accounts/ can lag behind it.
+        let liveURL = URL(fileURLWithPath: "\(NSHomeDirectory())/.codex/auth.json")
+        let live = (try? Data(contentsOf: liveURL)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        let liveBelongsHere = AuthSnapshotSync.decision(
+            live: live,
+            snapshot: nil,
+            expectedAccountID: expectedAccountID,
+            expectedUserID: registryAccount["chatgpt_user_id"] as? String
+        ) != .mismatch
+        // The document that passed the identity check is the one used: auth.json can change between reads.
+        let saved: [String: Any]?
+        if liveBelongsHere {
+            saved = live
+        } else {
+            guard let authURL = authFileURL(forAccountID: expectedAccountID, root: root) else {
+                return .failure("saved account auth file was not found")
+            }
+            saved = (try? Data(contentsOf: authURL)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
         }
         guard
-            let authData = try? Data(contentsOf: authURL),
-            let auth = try? JSONSerialization.jsonObject(with: authData) as? [String: Any],
+            let auth = saved,
             let tokens = auth["tokens"] as? [String: Any],
             let accessToken = tokens["access_token"] as? String,
             let accountID = tokens["account_id"] as? String,

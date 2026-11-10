@@ -485,31 +485,42 @@ enum ClaudeAccountStore {
         var usage: [String: Any]?
         var error: String? = credentials == nil ? "No saved login" : nil
 
-        if canRefresh, let current = credentials, isExpired(current) {
-            switch await refreshed(current, profile: profile) {
-            case .success(let updated): credentials = updated
-            case .failure(let failure):
-                needsLogin = failure.isInvalidGrant
-                error = failure.message
+        var waitsForOwner = false
+        if let current = credentials {
+            if canRefresh, isExpired(current) {
+                switch await refreshed(current, profile: profile) {
+                case .success(let updated): credentials = updated
+                case .failure(let failure):
+                    needsLogin = failure.isInvalidGrant
+                    error = failure.message
+                }
+            } else if ClaudeLoginPolicy.waitsForOwner(tokenExpired: isExpired(current, margin: 0), canRefresh: canRefresh) {
+                // Sending the expired token would only earn a 401 and drop the last reading.
+                waitsForOwner = true
+                error = ClaudeLoginPolicy.waitingMessage
             }
         }
-        if let token = credentials?["accessToken"] as? String, !needsLogin {
+        if let token = credentials?["accessToken"] as? String, !needsLogin, !waitsForOwner {
             var result = await fetchUsage(token: token, key: profile.id)
-            if case .failure(let failure) = result, failure.status == 401, canRefresh, let current = credentials {
-                switch await refreshed(current, profile: profile) {
-                case .success(let updated):
-                    if let newToken = updated["accessToken"] as? String { result = await fetchUsage(token: newToken, key: profile.id) }
-                case .failure(let refreshFailure):
-                    needsLogin = refreshFailure.isInvalidGrant
+            if case .failure(let failure) = result, failure.status == 401 {
+                var rejection = ClaudeLoginPolicy.Rejection.notAllowed
+                if canRefresh, let current = credentials {
+                    switch await refreshed(current, profile: profile) {
+                    case .success(let updated):
+                        if let newToken = updated["accessToken"] as? String { result = await fetchUsage(token: newToken, key: profile.id) }
+                        if case .failure(let retried) = result, retried.status == 401 { rejection = .refreshedButStillRejected }
+                    case .failure(let refreshFailure):
+                        rejection = .failed(invalidGrant: refreshFailure.isInvalidGrant)
+                    }
                 }
+                needsLogin = ClaudeLoginPolicy.needsLogin(afterRejection: rejection)
             }
             switch result {
             case .success(let object):
                 usage = object
                 error = nil
             case .failure(let failure):
-                if failure.status == 401 { needsLogin = true }
-                error = failure.message
+                error = failure.status == 401 && !canRefresh ? ClaudeLoginPolicy.waitingMessage : failure.message
             }
         }
 
@@ -550,9 +561,10 @@ enum ClaudeAccountStore {
         return plan
     }
 
-    static func isExpired(_ credentials: [String: Any]) -> Bool {
+    /// `margin` refreshes a token shortly before it lapses; pass 0 to ask whether it has lapsed.
+    static func isExpired(_ credentials: [String: Any], margin: TimeInterval = 120) -> Bool {
         guard let expiresAt = (credentials["expiresAt"] as? NSNumber)?.doubleValue else { return false }
-        return Date(timeIntervalSince1970: expiresAt / 1000) < Date().addingTimeInterval(120)
+        return Date(timeIntervalSince1970: expiresAt / 1000) < Date().addingTimeInterval(margin)
     }
 
     private static func parseDate(_ text: String) -> Date? {

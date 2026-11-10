@@ -15,6 +15,7 @@ ANALYTICS_ENGINE+=("$ROOT_DIR/Sources/CursorUsage.swift")
   "$ROOT_DIR/Sources/AppInfrastructure.swift" \
   "$ROOT_DIR/Sources/LimitResetWatcher.swift" \
   "$ROOT_DIR/Sources/ClaudeResets.swift" \
+  "$ROOT_DIR/Sources/CodexAuthSupport.swift" \
   "${ANALYTICS_ENGINE[@]}" \
   "$ROOT_DIR/Tests/InfrastructureTests.swift" \
   -target arm64-apple-macosx14.0 \
