@@ -118,11 +118,6 @@ struct AnalyticsDedupLog: Codable {
 
     init() {}
 
-    var count: Int { members.count }
-
-    func contains(_ key: String) -> Bool { members.contains(AnalyticsHash.of(key)) }
-
-    /// Returns false when the key was already present.
     @discardableResult
     mutating func insert(_ key: String) -> Bool {
         members.insert(AnalyticsHash.of(key)).inserted
@@ -146,7 +141,6 @@ struct AnalyticsProjectCacheEntry: Codable {
     let checkedAt: Double
 }
 
-/// Everything the engine persists between launches (spec §0: buckets plus per-file cursors).
 struct AnalyticsStore: Codable {
     static let currentVersion = 2
 

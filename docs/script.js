@@ -1,5 +1,3 @@
-// Codex Account Switcher site: the menu bar item opens and closes the panel,
-// and the controls under it switch tab and appearance, like the real app.
 (() => {
   const panel = document.querySelector("[data-panel]");
   const screen = document.querySelector("[data-screen]");
@@ -16,7 +14,6 @@
   let tab = "accounts";
   let theme = "dark";
 
-  // Warm the cache so switching feels instant.
   for (const name of Object.keys(screens)) {
     for (const mode of ["dark", "light"]) {
       const image = new Image();
@@ -28,15 +25,21 @@
     buttons.forEach((button) => button.setAttribute("aria-pressed", String(button.dataset[attribute] === value)));
   };
 
+  let screenTransition;
   const showScreen = () => {
     if (!screen || !panel) return;
+    window.clearTimeout(screenTransition);
     const next = `assets/screens/${tab}-${theme}.webp`;
-    if (screen.getAttribute("src") === next) return;
+    const selected = screens[tab];
+    if (screen.getAttribute("src") === next) {
+      panel.classList.remove("is-swapping");
+      return;
+    }
     panel.classList.add("is-swapping");
-    window.setTimeout(() => {
+    screenTransition = window.setTimeout(() => {
       screen.src = next;
-      screen.height = screens[tab].height;
-      screen.alt = screens[tab].alt;
+      screen.height = selected.height;
+      screen.alt = selected.alt;
       panel.classList.remove("is-swapping");
     }, 120);
   };

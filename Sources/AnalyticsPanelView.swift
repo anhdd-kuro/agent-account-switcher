@@ -1,7 +1,6 @@
 import AppKit
 import Foundation
 
-/// What the panel needs from the analytics engine; built by the app delegate like `ClaudePanelModel`.
 struct AnalyticsPanelModel {
     let snapshot: AnalyticsSnapshot?
     let status: AnalyticsScanStatus
@@ -17,8 +16,7 @@ struct AnalyticsPanelModel {
         refresh: {}
     )
 
-    /// Toolbar subtitle and whether it is a warning.
-    var subtitle: (String, Bool) {
+    var subtitle: (text: String, isWarning: Bool) {
         if let error = status.lastError, !error.isEmpty { return (error, true) }
         if status.isScanning {
             guard status.totalBytes > 0 else { return ("Indexing logs…", false) }
@@ -38,7 +36,6 @@ enum AnalyticsBreakdownMode {
     case projects
 }
 
-/// Lays out the Analytics tab body: period, headline, tiles, top models, heatmap, trend, tables.
 struct AnalyticsPanelBuilder {
     let model: AnalyticsPanelModel
     let theme: PanelTheme

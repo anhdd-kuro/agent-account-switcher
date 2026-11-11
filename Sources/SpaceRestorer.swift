@@ -13,7 +13,6 @@ import Cocoa
 struct SpaceRestorer {
     static let defaultsKey = "reopenOnSameDesktop"
 
-    /// On (default): relaunch on the desktop the app was on. Off: it opens on the desktop in front.
     static var isEnabled: Bool {
         get { UserDefaults.standard.object(forKey: defaultsKey) as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: defaultsKey) }
@@ -24,7 +23,6 @@ struct SpaceRestorer {
     private let displayID: String
     private let returnSpaceID: Int
 
-    /// Remembers the Space of the largest window owned by `pids`; nil if none is found.
     init?(windowsOf pids: Set<Int32>) {
         guard Self.isEnabled else { return nil }
         let connection = self.connection
@@ -45,16 +43,13 @@ struct SpaceRestorer {
         returnSpaceID = display.currentSpace
     }
 
-    /// True when the remembered Space is already the one on screen.
     var isVisible: Bool { returnSpaceID == spaceID }
 
-    /// Shows the remembered Space on its display so a launching app opens there.
     func showRememberedSpace() {
         guard !isVisible else { return }
         CGSManagedDisplaySetCurrentSpace(connection, displayID as CFString, spaceID)
     }
 
-    /// Puts the display back on the Space the user was looking at.
     func returnToPreviousSpace() {
         guard !isVisible else { return }
         CGSManagedDisplaySetCurrentSpace(connection, displayID as CFString, returnSpaceID)

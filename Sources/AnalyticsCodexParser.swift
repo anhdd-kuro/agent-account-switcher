@@ -72,7 +72,7 @@ struct AnalyticsCompaction: Codable, Equatable {
     let usage: AnalyticsCounts
 }
 
-struct AnalyticsCodexCursor: Codable {
+struct AnalyticsCodexCursor: Codable, AnalyticsLogCursor {
     var inode: UInt64
     var size: Int64
     var mtime: Double
@@ -82,9 +82,7 @@ struct AnalyticsCodexCursor: Codable {
     /// Read position inside an oversized record being discarded (see `AnalyticsLines.streamRecords`).
     var discardingFrom: Int64?
 
-    var readPosition: Int64 { discardingFrom ?? offset }
     var stream = AnalyticsCodexStream()
-    var session = AnalyticsCodexSession()
 }
 
 struct AnalyticsCodexEvent {
@@ -97,8 +95,7 @@ struct AnalyticsCodexEvent {
     let projectKey: String?
 }
 
-/// One pass over new bytes of a rollout feeding both the usage buckets (spec §1) and the session
-/// collector (§5). Fork state is per pass, as upstream: a resumed scan never sees the replay prefix.
+/// Fork state is per pass: a resumed scan never sees the replay prefix.
 struct AnalyticsCodexParser {
     var cursor: AnalyticsCodexCursor
     private(set) var events: [AnalyticsCodexEvent] = []
@@ -127,9 +124,6 @@ struct AnalyticsCodexParser {
     }
 
     mutating func consume(_ line: AnalyticsLine) {
-        if let stamp = line.firstStringValue(after: "\"timestamp\":\"", within: 64), let seconds = AnalyticsTime.parse(stamp) {
-            cursor.session.bounds.note(seconds)
-        }
         if cursor.stream.compaction != nil && !cursor.stream.compactionConfirmed {
             if UnsafeRawBufferPointer(rebasing: line.prefix(256)).contains("\"type\":\"compacted\"") {
                 cursor.stream.compactionConfirmed = true
@@ -139,13 +133,11 @@ struct AnalyticsCodexParser {
         }
         guard line.contains("\"token_count\"") || line.contains("\"turn_context\"") || line.contains("\"session_meta\"")
                 || line.contains("\"thread_settings_applied\"") || line.contains("\"token_usage_record\"")
-                || line.contains("\"user_message\"") || line.contains("\"type\":\"function_call\"")
-                || line.contains("\"type\":\"custom_tool_call\"") || line.contains("model/rerouted") || line.contains("model_rerouted"),
+                || line.contains("model/rerouted") || line.contains("model_rerouted"),
               let obj = line.jsonObject() else { return }
         let modelEvent = applyModelEvent(obj)
         let attributed = cursor.stream.currentModel
         if let attributed { cursor.stream.lastModel = attributed }
-        cursor.session.observe(obj, model: attributed)
         let type = obj.string("type")
         let payload = obj.object("payload")
         if type == "event_msg", payload?.string("type") == "thread_settings_applied",
@@ -241,11 +233,10 @@ struct AnalyticsCodexParser {
         return AnalyticsCounts(fields: keys.map(usage.count))
     }
 
-    /// §1.6: input excludes cached; the reported total is kept for buckets, recomputed for sessions.
-    private static func normalized(_ raw: AnalyticsCounts, recomputeTotal: Bool) -> AnalyticsCounts {
+    /// Codex input includes cached tokens; buckets retain the provider-reported total.
+    private static func normalized(_ raw: AnalyticsCounts) -> AnalyticsCounts {
         var counts = raw
         counts.input = max(0, raw.input - raw.cached)
-        if recomputeTotal { counts.total = counts.input + counts.cached + counts.cacheCreation + counts.output }
         return counts
     }
 
@@ -268,7 +259,7 @@ struct AnalyticsCodexParser {
         guard let payload = obj.object("payload"), let raw = Self.canonical(payload["usage"]),
               let timestamp = obj.string("timestamp"), let seconds = AnalyticsTime.parse(timestamp),
               let responseId = payload.string("response_id"), !responseId.isEmpty,
-              !Self.normalized(raw, recomputeTotal: false).isZero else { return }
+              !Self.normalized(raw).isZero else { return }
         cursor.stream.compaction = AnalyticsCompaction(responseId: responseId, halfHour: AnalyticsTime.halfHour(seconds), model: bucketModel,
                                                        tier: cursor.stream.serviceTier, projectKey: cursor.stream.projectKey, usage: raw)
     }
@@ -281,9 +272,7 @@ struct AnalyticsCodexParser {
         guard let held, confirmed, let previous = cursor.stream.lastTotal, previous == total else { return }
         let tier = AnalyticsTier(serviceTier: held.tier)
         events.append(AnalyticsCodexEvent(dedupKey: "resp:\(held.responseId)", isCompaction: true, halfHour: held.halfHour, model: held.model,
-                                          delta: Self.normalized(held.usage, recomputeTotal: false), tier: tier, projectKey: held.projectKey))
-        cursor.session.recordCompaction(id: held.responseId, delta: Self.normalized(held.usage, recomputeTotal: true),
-                                        rawInput: held.usage.input, model: held.model, tier: tier)
+                                          delta: Self.normalized(held.usage), tier: tier, projectKey: held.projectKey))
     }
 
     private mutating func consumeTokenCount(_ info: [String: Any], timestamp: String) {
@@ -293,16 +282,9 @@ struct AnalyticsCodexParser {
         takeCompaction(total: total)
         let raw = cursor.stream.consume(last: last, total: total)
         let tier = AnalyticsTier(serviceTier: cursor.stream.serviceTier)
-        if let raw {
-            let signature = AnalyticsHash.of("\(last?.fields ?? [])|\(total?.fields ?? [])")
-            if cursor.session.isNewTokenEvent(timestamp: timestamp, signature: signature) {
-                cursor.session.recordUsage(Self.normalized(raw, recomputeTotal: true), rawInput: (last ?? raw).input,
-                                           model: cursor.stream.currentModel ?? "unknown", tier: tier)
-            }
-        }
         let sentinel = Self.isResetSentinel(last: info.object("last_token_usage"), total: info.object("total_token_usage"))
         guard let raw, !sentinel else { return }
-        let delta = Self.normalized(raw, recomputeTotal: false)
+        let delta = Self.normalized(raw)
         guard !delta.isZero, !isForkReplay(timestamp), let seconds = AnalyticsTime.parse(timestamp) else { return }
         events.append(AnalyticsCodexEvent(dedupKey: "\(sessionId):\(timestamp)", isCompaction: false, halfHour: AnalyticsTime.halfHour(seconds),
                                           model: bucketModel, delta: delta, tier: tier, projectKey: cursor.stream.projectKey))

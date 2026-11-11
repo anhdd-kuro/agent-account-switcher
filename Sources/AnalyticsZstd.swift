@@ -50,7 +50,6 @@ private final class OutputBuffer {
         count += length
     }
 
-    /// Byte-wise so overlapping matches (offset < length) replicate correctly.
     func copyMatch(offset: Int, length: Int) {
         var src = ptr + (count - offset)
         var dst = ptr + count

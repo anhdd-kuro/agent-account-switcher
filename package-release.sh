@@ -9,6 +9,6 @@ ARCHIVE="$ROOT_DIR/build/Codex-Account-Switcher-v$VERSION.zip"
 VERIFY_DIR="$(/usr/bin/mktemp -d /tmp/codex-switcher-verify.XXXXXX)"
 trap '/bin/rm -rf "$VERIFY_DIR"' EXIT
 /usr/bin/ditto -x -k "$ARCHIVE" "$VERIFY_DIR"
-/usr/bin/codesign --verify --deep --strict "$VERIFY_DIR/Codex Account Switcher.app"
+/usr/bin/codesign --verify --deep --strict "$VERIFY_DIR/$(basename "$APP_PATH")"
 echo "$ARCHIVE"
 echo "$ARCHIVE.sha256"

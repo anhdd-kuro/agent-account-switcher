@@ -2,13 +2,13 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$ROOT_DIR/scripts/app-bundle.sh"
 BUILD_DIR="$ROOT_DIR/build"
-APP_NAME="AI Account Switcher"
 APP_DIR="$BUILD_DIR/$APP_NAME.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
-BIN_PATH="$MACOS_DIR/CodexAccountSwitcher"
+BIN_PATH="$MACOS_DIR/$APP_EXECUTABLE"
 MODULE_CACHE_DIR="${CODEX_SWITCHER_MODULE_CACHE_DIR:-$HOME/Library/Caches/CodexAccountSwitcher/ModuleCache}"
 ICON_SOURCE="$ROOT_DIR/Sources/icon.png"
 TOOLBAR_ICON_SOURCE="$ROOT_DIR/Sources/toolbar-icon.png"
@@ -30,11 +30,11 @@ if [[ -f "$TOOLBAR_ICON_SOURCE" ]]; then
   cp "$TOOLBAR_ICON_SOURCE" "$RESOURCES_DIR/ToolbarIcon.png"
 fi
 
-CLANG_MODULE_CACHE_PATH="$MODULE_CACHE_DIR" swiftc "$LIFECYCLE_MONITOR_SOURCE" \
+CLANG_MODULE_CACHE_PATH="$MODULE_CACHE_DIR" swiftc "$LIFECYCLE_MONITOR_SOURCE" "$ROOT_DIR/Sources/DesktopApplication.swift" \
   -target arm64-apple-macosx14.0 \
   -module-cache-path "$MODULE_CACHE_DIR" \
   -framework AppKit \
-  -o "$RESOURCES_DIR/CodexLifecycleMonitor"
+  -o "$RESOURCES_DIR/$MONITOR_EXECUTABLE"
 
 APP_SOURCES=()
 for source in "$ROOT_DIR"/Sources/*.swift; do
@@ -50,7 +50,7 @@ CLANG_MODULE_CACHE_PATH="$MODULE_CACHE_DIR" swiftc \
   -framework UserNotifications \
   -o "$BIN_PATH"
 
-cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
+cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -58,15 +58,15 @@ cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleExecutable</key>
-  <string>CodexAccountSwitcher</string>
+  <string>$APP_EXECUTABLE</string>
   <key>CFBundleIdentifier</key>
-  <string>com.mohamedfuad.codexaccountswitcher</string>
+  <string>$APP_BUNDLE_IDENTIFIER</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>AI Account Switcher</string>
+  <string>$APP_NAME</string>
   <key>CFBundleDisplayName</key>
-  <string>AI Account Switcher</string>
+  <string>$APP_NAME</string>
   <key>CFBundleIconFile</key>
   <string>AccountSwitcherIcon.png</string>
   <key>NSUserNotificationUsageDescription</key>
@@ -85,26 +85,6 @@ cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-if command -v xattr >/dev/null 2>&1; then
-  /usr/bin/xattr -cr "$APP_DIR"
-  /usr/bin/xattr -d com.apple.FinderInfo "$APP_DIR" 2>/dev/null || true
-  /usr/bin/xattr -d 'com.apple.fileprovider.fpfs#P' "$APP_DIR" 2>/dev/null || true
-fi
-if command -v codesign >/dev/null 2>&1; then
-  signed=0
-  for _ in 1 2 3 4 5; do
-    /usr/bin/xattr -cr "$APP_DIR" 2>/dev/null || true
-    /usr/bin/xattr -d com.apple.FinderInfo "$APP_DIR" 2>/dev/null || true
-    /usr/bin/xattr -d 'com.apple.fileprovider.fpfs#P' "$APP_DIR" 2>/dev/null || true
-    if /usr/bin/codesign --force --deep --sign - "$APP_DIR" >/dev/null 2>&1; then
-      signed=1
-      break
-    fi
-  done
-  if [[ "$signed" != "1" ]]; then
-    echo "Could not ad-hoc sign the build bundle after five metadata-cleanup attempts." >&2
-    exit 1
-  fi
-fi
+sign_app_bundle "$APP_DIR"
 
 echo "$APP_DIR"

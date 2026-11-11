@@ -1,11 +1,12 @@
 import Foundation
 
-extension ClaudeAccountStore {
+extension ClaudeAPI {
     /// Spends one Claude reset for a saved profile. The active profile's token belongs to
     /// Claude Code and is never refreshed here; an inactive profile's token is refreshed
     /// first when it has expired.
     static func claimReset(profileID: String, grant: ClaudeResetGrant, requestID: String) async -> Result<ClaudeResetClaimResult, ClaudeError> {
-        guard let profile = loadProfiles().first(where: { $0.id == profileID }) else {
+        let snapshot = ClaudeAccountStore.synchronize()
+        guard let profile = snapshot.profiles.first(where: { $0.id == profileID }) else {
             return .failure(.message("Claude profile not found."))
         }
         guard let url = ClaudeResetAPI.claimURL(organizationID: profile.organizationID) else {
@@ -16,14 +17,10 @@ extension ClaudeAccountStore {
             return .failure(.message("This reset has an unexpected id, so it was not used."))
         }
 
-        // Decide from the live login, not cached state: Claude Code owns the live token.
-        let liveOwner = liveIdentity()
-        let isLive = liveOwner == profileID
-        var credentials = oauth(parseCredentials(ClaudeKeychain.read(isLive ? liveService : profile.keychainService)))
-        let liveRefreshToken = oauth(parseCredentials(ClaudeKeychain.read(liveService)))?["refreshToken"] as? String
-        let mayRefresh = !isLive && liveOwner != nil && credentials?["refreshToken"] as? String != liveRefreshToken
+        let context = snapshot.credentials.context(for: profile.id)
+        var credentials = context.credentials
         if let current = credentials, isExpired(current) {
-            guard mayRefresh else {
+            guard context.canRefresh else {
                 return .failure(.message("The login for \(profile.title) has expired. Use Claude Code once to renew it, then try again."))
             }
             switch await refreshed(current, profile: profile) {
@@ -48,7 +45,7 @@ extension ClaudeAccountStore {
         let payload: HTTPPayload
         do {
             // Never retried: a second POST could spend a second reset.
-            payload = try await CodexHTTPClient.send(request, retries: 0)
+            payload = try await HTTPClient.send(request, retries: 0)
         } catch {
             return .failure(.message("The reset request did not complete (\(error.localizedDescription)). Refresh to check whether it was used."))
         }
@@ -67,7 +64,6 @@ extension ClaudeAccountStore {
 }
 
 extension ClaudeController {
-    /// Claims one reset, then refreshes usage so the panel shows the refilled limits.
     func claimReset(profileID: String, grantID: String, completion: @escaping (Result<ClaudeResetClaimResult, ClaudeError>) -> Void) {
         guard isEnabled else { return completion(.failure(.message("Claude resets are disabled in demo mode."))) }
         guard !isClaimingReset, !isSwitching else {
@@ -77,9 +73,7 @@ extension ClaudeController {
               let grant = account.resets?.grants.first(where: { $0.id == grantID }) else {
             return completion(.failure(.message("This reset is no longer listed. Refresh and try again.")))
         }
-        // An inactive profile's token may be rotating in the refresh; using it now could
-        // spend the refresh token twice.
-        guard account.isActive || !isRefreshing else {
+        guard !isRefreshing else {
             return completion(.failure(.message("Claude accounts are refreshing. Try again in a moment.")))
         }
         let requestKey = "\(profileID)|\(grant.id)|\(grant.resetsLeft)"
@@ -88,7 +82,7 @@ extension ClaudeController {
         isClaimingReset = true
         onChange?()
         Task.detached(priority: .userInitiated) {
-            let result = await ClaudeAccountStore.claimReset(profileID: profileID, grant: grant, requestID: requestID)
+            let result = await self.submitResetClaim(profileID, grant, requestID)
             await MainActor.run {
                 self.isClaimingReset = false
                 switch result {

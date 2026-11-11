@@ -7,6 +7,10 @@ struct ClaudeResetGrant: Equatable {
     static let grantProgram = "cedar_ember"
     static let fiveHourProgram = "juniper_tide"
 
+    static func isValidID(_ text: String) -> Bool {
+        text.range(of: #"^[a-z0-9_-]{1,40}$"#, options: .regularExpression) != nil
+    }
+
     let program: String
     let id: String
     let label: String
@@ -40,7 +44,6 @@ struct ClaudeResetGrant: Equatable {
         }
     }
 
-    /// "5-hour + weekly" from limit keys such as `five_hour` and `seven_day_opus`.
     static func describe(_ limits: [String]) -> String {
         var names: [String] = []
         for limit in limits {
@@ -67,7 +70,6 @@ struct ClaudeResetStatus: Equatable {
     var availableCount: Int { grants.reduce(0) { $0 + $1.resetsLeft } }
     var usableCount: Int { grants.filter(\.usableNow).reduce(0) { $0 + $1.resetsLeft } }
 
-    /// Nil when the usage response carries neither reset block.
     static func parse(usage: [String: Any]) -> ClaudeResetStatus? {
         let cedar = usage["cedar_ember"] as? [String: Any]
         let juniper = usage["juniper_tide"] as? [String: Any]
@@ -102,12 +104,11 @@ struct ClaudeResetStatus: Equatable {
         return ClaudeResetStatus(eligible: eligible, ineligibleReason: eligible ? nil : reason, grants: grants)
     }
 
-    /// Larger counts are treated as malformed so totals cannot overflow.
     static let maxResetsPerGrant = 1000
 
     private static func parseGrant(_ raw: Any) -> ClaudeResetGrant? {
         guard let grant = raw as? [String: Any],
-              let id = grant["id"] as? String, ClaudeResetAPI.isGrantID(id),
+              let id = grant["id"] as? String, ClaudeResetGrant.isValidID(id),
               let left = (grant["resets_left"] as? NSNumber)?.intValue, left > 0, left <= maxResetsPerGrant,
               grant["paused"] as? Bool != true else {
             return nil
@@ -118,7 +119,7 @@ struct ClaudeResetStatus: Equatable {
             label: grant["label"] as? String ?? "",
             kind: grant["type"] as? String ?? "",
             resetsLeft: left,
-            endsAt: (grant["ends_at"] as? String).flatMap(ClaudeResetAPI.parseDate),
+            endsAt: (grant["ends_at"] as? String).flatMap(ISO8601Timestamp.parse),
             clears: (grant["clears"] as? [Any] ?? []).compactMap { $0 as? String },
             usableNow: grant["usable_now"] as? Bool ?? false,
             unavailableReason: grant["unavailable_reason"] as? String
@@ -137,10 +138,6 @@ enum ClaudeResetAPI {
     static let usageQuery = "cedar_ember=1&skip_spend=1"
     static let fallbackCLIVersion = "2.1.319"
 
-    static func isGrantID(_ text: String) -> Bool {
-        text.range(of: #"^[a-z0-9_-]{1,40}$"#, options: .regularExpression) != nil
-    }
-
     private static func isRequestID(_ text: String) -> Bool {
         text.range(of: #"^[A-Za-z0-9_-]{1,64}$"#, options: .regularExpression) != nil
     }
@@ -155,7 +152,7 @@ enum ClaudeResetAPI {
         case ClaudeResetGrant.fiveHourProgram:
             return ["program": program]
         case ClaudeResetGrant.grantProgram:
-            guard isGrantID(grantID), isRequestID(requestID) else { return nil }
+            guard ClaudeResetGrant.isValidID(grantID), isRequestID(requestID) else { return nil }
             return ["program": program, "grant_id": grantID, "request_id": requestID]
         default:
             return nil
@@ -174,7 +171,7 @@ enum ClaudeResetAPI {
         case "not_limited":
             return .refused("This reset can only be used while you are at a limit it clears.")
         case "cooldown":
-            let until = (object["cooldown_until"] as? String).flatMap(parseDate)
+            let until = (object["cooldown_until"] as? String).flatMap(ISO8601Timestamp.parse)
             return .refused(until.map { "A reset was used recently. Try again after \(DateFormatter.localizedString(from: $0, dateStyle: .medium, timeStyle: .short))." }
                 ?? "A reset was used recently. Try again later.")
         case "ineligible":
@@ -197,9 +194,4 @@ enum ClaudeResetAPI {
         "claude-cli/\(version) (external, cli)"
     }
 
-    static func parseDate(_ text: String) -> Date? {
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return fractional.date(from: text) ?? ISO8601DateFormatter().date(from: text)
-    }
 }

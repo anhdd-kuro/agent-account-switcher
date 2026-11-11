@@ -3,17 +3,15 @@ import Foundation
 
 // MARK: - Activity heatmap
 
-/// 26 weeks × 7 days, Sunday at the top, month labels above and a Less → More legend below (§4.2).
 final class AnalyticsHeatmapView: NSView, NSViewToolTipOwner {
-    static func height(width: CGFloat) -> CGFloat { 13 + 7 * ((width - 14) / 26) + 16 }
+    static func height(width: CGFloat) -> CGFloat { 13 + 7 * ((width - 14) / CGFloat(AnalyticsHeatmap.weeks)) + 16 }
 
     private let cells: [AnalyticsHeatCell]
     private let theme: PanelTheme
     private let colors: [NSColor]
     private let labelColumn: CGFloat = 14
     private let monthRow: CGFloat = 13
-    private let weeks = 26
-    private var pitch: CGFloat { (bounds.width - labelColumn) / CGFloat(weeks) }
+    private var pitch: CGFloat { (bounds.width - labelColumn) / CGFloat(AnalyticsHeatmap.weeks) }
     private var cellSize: CGFloat { max(2, pitch - 1) }
 
     init(frame: NSRect, cells: [AnalyticsHeatCell], theme: PanelTheme) {
@@ -104,7 +102,6 @@ final class AnalyticsHeatmapView: NSView, NSViewToolTipOwner {
 
 // MARK: - Usage trend
 
-/// Stacked bars by model, future buckets as faint ghosts, start/end labels and a model legend (§4.5).
 final class AnalyticsTrendView: NSView, NSViewToolTipOwner {
     static let height: CGFloat = 122
 
@@ -136,7 +133,7 @@ final class AnalyticsTrendView: NSView, NSViewToolTipOwner {
     override var isFlipped: Bool { true }
 
     private func total(_ bar: AnalyticsTrendBar) -> Int {
-        bar.segments.reduce(0) { $0 + $1.tokens }
+        bar.segments.saturatingSum { $0.tokens }
     }
 
     private var gap: CGFloat {
@@ -153,7 +150,6 @@ final class AnalyticsTrendView: NSView, NSViewToolTipOwner {
         NSRect(x: CGFloat(index) * (barWidth + gap), y: chartTop, width: barWidth, height: chartHeight)
     }
 
-    /// Clips outliers above Q3 + 1.5·IQR when there are at least four values, except for "total".
     private func computeYMax() -> Double {
         let values = bars.filter { !$0.isFuture }.map { Double(total($0)) }.sorted()
         guard let maximum = values.last, maximum > 0 else { return 1 }
@@ -171,7 +167,6 @@ final class AnalyticsTrendView: NSView, NSViewToolTipOwner {
         return sorted[lower] + (sorted[upper] - sorted[lower]) * (position - Double(lower))
     }
 
-    /// Future buckets borrow the average active bar and decay ×0.98 per step.
     private func computeGhosts() -> [Int: Double] {
         let active = bars.filter { !$0.isFuture }.map { Double(total($0)) }.filter { $0 > 0 }
         guard !active.isEmpty else { return [:] }
@@ -260,15 +255,15 @@ final class AnalyticsTrendView: NSView, NSViewToolTipOwner {
         peak.draw(at: NSPoint(x: (bounds.width - peakWidth) / 2, y: y), withAttributes: smallAttributes)
     }
 
-    /// One entry per colour: model families share a colour (§4.5), so they share a legend label.
     private func legendEntries() -> [(name: String, color: NSColor)] {
         var sums: [String: Int] = [:]
         for bar in bars where !bar.isFuture {
-            for segment in bar.segments { sums[segment.name, default: 0] += segment.tokens }
+            for segment in bar.segments { sums[segment.name] = (sums[segment.name] ?? 0).saturatingAdd(segment.tokens) }
         }
         var families: [String: Int] = [:]
         for (name, tokens) in sums where tokens > 0 {
-            families[AnalyticsPanelPalette.modelFamily(name), default: 0] += tokens
+            let family = AnalyticsPanelPalette.modelFamily(name)
+            families[family] = (families[family] ?? 0).saturatingAdd(tokens)
         }
         return families
             .sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }

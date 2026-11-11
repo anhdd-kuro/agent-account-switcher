@@ -1,7 +1,7 @@
 import Foundation
 
 // Read-side model for the Analytics tab. Ported from TokenTracker (MIT, github.com/xiufengsun/TokenTracker);
-// definitions follow tmp/analytics-spec.md §4–§6. Codex and Claude Code sources only.
+// definitions follow the TokenTracker read-side contract.
 
 enum AnalyticsSource: String, CaseIterable, Codable {
     case codex
@@ -46,6 +46,10 @@ struct AnalyticsModelShare: Equatable {
     let share: Double             // 0...100
 }
 
+enum AnalyticsHeatmap {
+    static let weeks = 26
+}
+
 struct AnalyticsHeatCell: Equatable {
     let day: Date
     let tokens: Int
@@ -63,24 +67,6 @@ struct AnalyticsProject: Equatable {
     let totals: AnalyticsTotals
 }
 
-struct AnalyticsEfficiencyModel: Equatable {
-    let model: String
-    let sessions: Int
-    let editSessions: Int
-    let firstPassRate: Double?    // 0...1
-    let tokensPerEdit: Int?
-}
-
-struct AnalyticsEfficiency: Equatable {
-    let sessions: Int
-    let editSessions: Int
-    let firstPassSessions: Int
-    let editTurns: Int
-    let costPerEditUSD: Double?
-    let costIsPartial: Bool       // an edit session used a model with no price; cost is a lower bound
-    let byModel: [AnalyticsEfficiencyModel] // top 5
-}
-
 struct AnalyticsSnapshot: Equatable {
     let period: AnalyticsPeriod
     let from: Date                // local midnight, inclusive
@@ -88,17 +74,16 @@ struct AnalyticsSnapshot: Equatable {
     let totals: AnalyticsTotals   // selected period
     let costIsPartial: Bool       // some model had no price
     let sources: [AnalyticsSourceShare]
-    let topModels: [AnalyticsModelShare] // top 3 for the selected period
+    let topModels: [AnalyticsModelShare] // top 5 for the selected period
     let last7dTokens: Int
     let last30dTokens: Int
     let averageDailyTokens: Int   // 30d / active days in 30d
     let started: Date?
-    let activeDays: Int           // 52-week heatmap window
-    let heatmap: [AnalyticsHeatCell] // week-aligned, Sunday start, 52 columns, oldest first
+    let activeDays: Int           // heatmap window
+    let heatmap: [AnalyticsHeatCell] // week-aligned, Sunday start, oldest first
     let trend: [AnalyticsTrendBar]
     let daily: [AnalyticsDay]     // last 30 days, newest first
     let projects: [AnalyticsProject] // selected period, tokens descending
-    let efficiency: AnalyticsEfficiency?
     let scannedAt: Date
 }
 

@@ -94,10 +94,7 @@ struct AnalyticsScanner {
                 jobs.append(.codex(path: path, stat: stat, cursor: AnalyticsCodexCursor(inode: stat.inode, size: stat.size, mtime: stat.mtime, offset: 0), compressed: true))
                 continue
             }
-            if var previous, previous.inode == stat.inode, previous.offset <= stat.size,
-               Self.unchangedPrefix(path, stat: stat, size: previous.size, mtime: previous.mtime, offset: previous.offset, fingerprint: previous.fingerprint) {
-                previous.size = stat.size
-                previous.mtime = stat.mtime
+            if var previous, previous.resume(path: path, stat: stat) {
                 if previous.readPosition == stat.size {
                     store.codexFiles[path] = previous
                     continue
@@ -118,10 +115,7 @@ struct AnalyticsScanner {
         for path in files {
             guard let stat = AnalyticsFileStat.of(path) else { continue }
             present.insert(path)
-            if var previous = store.claudeFiles[path], previous.inode == stat.inode, previous.offset <= stat.size,
-               Self.unchangedPrefix(path, stat: stat, size: previous.size, mtime: previous.mtime, offset: previous.offset, fingerprint: previous.fingerprint) {
-                previous.size = stat.size
-                previous.mtime = stat.mtime
+            if var previous = store.claudeFiles[path], previous.resume(path: path, stat: stat) {
                 if previous.readPosition == stat.size && previous.cwdChecked {
                     store.claudeFiles[path] = previous
                     continue
@@ -133,15 +127,6 @@ struct AnalyticsScanner {
         }
         store.claudeFiles = store.claudeFiles.filter { present.contains($0.key) }
         return jobs
-    }
-
-    /// Bytes already read must be unchanged before resuming (or skipping) at the cursor. Appends grow
-    /// the file, so a new mtime with the same size means an in-place rewrite: rescan from zero. A file
-    /// that grew is resumed only if the head/tail fingerprint of the read prefix still matches.
-    private static func unchangedPrefix(_ path: String, stat: AnalyticsFileStat, size: Int64, mtime: Double, offset: Int64, fingerprint: UInt64?) -> Bool {
-        guard offset > 0, stat.size != size || stat.mtime != mtime else { return true }
-        guard stat.size != size else { return false }
-        return AnalyticsFingerprint.of(path: path, upTo: offset) == fingerprint
     }
 
     static func isRollout(_ name: String) -> Bool {
@@ -329,23 +314,7 @@ struct AnalyticsScanner {
         return "u:\(cycle.min()!)"
     }
 
-    // MARK: Session records
 
-    /// Codex rows are grouped by the file-name UUID (sessions/ and archived copies, §5.1), keeping
-    /// the copy with the most tokens; Claude rows are one per file, observer transcripts excluded.
-    static func sessionRecords(_ store: AnalyticsStore) -> [AnalyticsSessionRecord] {
-        var codex: [String: AnalyticsSessionRecord] = [:]
-        for (path, cursor) in store.codexFiles {
-            let id = AnalyticsCodexParser.sessionId(fromName: (path as NSString).lastPathComponent) ?? path
-            let record = cursor.session.record(id: id)
-            if let existing = codex[id], existing.totalTokens >= record.totalTokens { continue }
-            codex[id] = record
-        }
-        let claude = store.claudeFiles
-            .filter { !$0.key.split(separator: "/").contains { $0.hasSuffix(AnalyticsProjectResolver.observerSegment) } }
-            .map { $0.value.session.record(id: $0.key) }
-        return Array(codex.values) + claude
-    }
 }
 
 /// Thread-safe byte counter that forwards progress at most every 32 MiB.

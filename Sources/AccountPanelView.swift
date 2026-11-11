@@ -1,143 +1,22 @@
 import AppKit
 import Foundation
 
-/// The menu-bar panel: Accounts, Resets, Settings and the Route B preview,
-/// drawn as a single Liquid Glass sheet with a uniform toolbar and tab control.
 final class AccountSwitcherPanelView: NSView {
-    private let accounts: [CodexAccount]
-    private let activeAccount: CodexAccount?
-    private let mode: AccountPanelMode
-    private let lastUpdatedText: String
-    private let lastError: String?
-    private let isSwitching: Bool
-    private let launchAtLoginEnabled: Bool
-    private let remindersEnabled: Bool
-    private let reminderThreshold: Int
-    private let autoSwitchThreshold: Int
-    private let autoSwitchMode: AutoSwitchMode
-    private let autoResumeMode: AutoResumeMode
-    private let confirmBeforeSwitching: Bool
-    private let armedSwitchEmail: String?
-    private let resetCreditsByEmail: [String: ResetCreditsSnapshot]
-    private let healthStatuses: [HealthStatus]
-    private let routeBProfiles: [RouteBProviderProfile]
-    private let selectedRouteBProfileID: String?
-    private let usageMode: UsageDisplayMode
-    private let claudeUsageMode: UsageDisplayMode
-    private let toolbarDisplayStyle: ToolbarDisplayStyle
-    private let activeRefreshInterval: Int
-    private let idleRefreshInterval: Int
-    private let labelForAccount: (CodexAccount) -> String
-    private let switchAccount: (String) -> Void
-    private let logoutAccount: (String) -> Void
-    private let refresh: () -> Void
-    private let checkUpdates: () -> Void
-    private let editAccountLabel: (String) -> Void
-    private let showResetCredits: () -> Void
-    private let redeemResetCredit: (String, String) -> Void
-    private let selectRouteBProfile: (String) -> Void
-    private let performSettingsAction: (SettingsPanelAction) -> Void
-    private let close: () -> Void
-    private let toggleLaunchAtLogin: () -> Void
-    private let claude: ClaudePanelModel
-    private let codexUsageByEmail: [String: DirectUsageSnapshot]
-    private let menuBarPreview: [MenuBarGlyph.UsagePart]
-    private let analytics: AnalyticsPanelModel
-    private let cursor: CursorUsageState
-    private let cursorLane: CursorMenuBarLane
-    private static var analyticsBreakdown: AnalyticsBreakdownMode = .daily
-
     static let panelWidth: CGFloat = 452
-    private let inset: CGFloat = 12
-    private var contentWidth: CGFloat { Self.panelWidth - inset * 2 }
+    let inset: CGFloat = 12
+    var contentWidth: CGFloat { Self.panelWidth - inset * 2 }
     private var builtForDark: Bool?
     private var theme: PanelTheme { PanelTheme.current(for: effectiveAppearance) }
 
-    init(
-        accounts: [CodexAccount],
-        activeAccount: CodexAccount?,
-        mode: AccountPanelMode,
-        lastUpdatedText: String,
-        lastError: String?,
-        isSwitching: Bool,
-        launchAtLoginEnabled: Bool,
-        remindersEnabled: Bool,
-        reminderThreshold: Int,
-        autoSwitchThreshold: Int,
-        autoSwitchMode: AutoSwitchMode,
-        autoResumeMode: AutoResumeMode,
-        confirmBeforeSwitching: Bool,
-        armedSwitchEmail: String?,
-        resetCreditsByEmail: [String: ResetCreditsSnapshot],
-        healthStatuses: [HealthStatus],
-        routeBProfiles: [RouteBProviderProfile],
-        selectedRouteBProfileID: String?,
-        usageMode: UsageDisplayMode,
-        claudeUsageMode: UsageDisplayMode,
-        toolbarDisplayStyle: ToolbarDisplayStyle,
-        activeRefreshInterval: Int,
-        idleRefreshInterval: Int,
-        labelForAccount: @escaping (CodexAccount) -> String,
-        switchAccount: @escaping (String) -> Void,
-        logoutAccount: @escaping (String) -> Void,
-        refresh: @escaping () -> Void,
-        checkUpdates: @escaping () -> Void,
-        editAccountLabel: @escaping (String) -> Void,
-        showResetCredits: @escaping () -> Void,
-        redeemResetCredit: @escaping (String, String) -> Void,
-        selectRouteBProfile: @escaping (String) -> Void,
-        performSettingsAction: @escaping (SettingsPanelAction) -> Void,
-        close: @escaping () -> Void,
-        toggleLaunchAtLogin: @escaping () -> Void,
-        claude: ClaudePanelModel = .empty,
-        codexUsageByEmail: [String: DirectUsageSnapshot] = [:],
-        cursor: CursorUsageState = CursorUsageState(),
-        cursorLane: CursorMenuBarLane = .off,
-        menuBarPreview: [MenuBarGlyph.UsagePart] = [],
-        analytics: AnalyticsPanelModel = .empty
-    ) {
-        self.accounts = accounts
-        self.activeAccount = activeAccount
-        self.mode = mode
-        self.lastUpdatedText = lastUpdatedText
-        self.lastError = lastError
-        self.isSwitching = isSwitching
-        self.launchAtLoginEnabled = launchAtLoginEnabled
-        self.remindersEnabled = remindersEnabled
-        self.reminderThreshold = reminderThreshold
-        self.autoSwitchThreshold = autoSwitchThreshold
-        self.autoSwitchMode = autoSwitchMode
-        self.autoResumeMode = autoResumeMode
-        self.confirmBeforeSwitching = confirmBeforeSwitching
-        self.armedSwitchEmail = armedSwitchEmail
-        self.resetCreditsByEmail = resetCreditsByEmail
-        self.healthStatuses = healthStatuses
-        self.routeBProfiles = routeBProfiles
-        self.selectedRouteBProfileID = selectedRouteBProfileID
-        self.usageMode = usageMode
-        self.claudeUsageMode = claudeUsageMode
-        self.toolbarDisplayStyle = toolbarDisplayStyle
-        self.activeRefreshInterval = activeRefreshInterval
-        self.idleRefreshInterval = idleRefreshInterval
-        self.labelForAccount = labelForAccount
-        self.switchAccount = switchAccount
-        self.logoutAccount = logoutAccount
-        self.refresh = refresh
-        self.checkUpdates = checkUpdates
-        self.editAccountLabel = editAccountLabel
-        self.showResetCredits = showResetCredits
-        self.redeemResetCredit = redeemResetCredit
-        self.selectRouteBProfile = selectRouteBProfile
-        self.performSettingsAction = performSettingsAction
-        self.close = close
-        self.toggleLaunchAtLogin = toggleLaunchAtLogin
-        self.claude = claude
-        self.codexUsageByEmail = codexUsageByEmail
-        self.menuBarPreview = menuBarPreview
-        self.analytics = analytics
-        self.cursor = cursor
-        self.cursorLane = cursorLane
-        super.init(frame: NSRect(origin: .zero, size: Self.preferredSize(mode: mode, accountCount: accounts.count + claude.accounts.count)))
+    let state: AccountPanelState
+    let actions: AccountPanelActions
+    private var bodyScrollView: NSScrollView?
+    private static var analyticsBreakdown: AnalyticsBreakdownMode = .daily
+
+    init(state: AccountPanelState, actions: AccountPanelActions) {
+        self.state = state
+        self.actions = actions
+        super.init(frame: NSRect(origin: .zero, size: Self.preferredSize(mode: state.mode, accountCount: state.accounts.count + state.claude.accounts.count)))
         wantsLayer = true
         build()
     }
@@ -147,8 +26,6 @@ final class AccountSwitcherPanelView: NSView {
     }
 
     override var isFlipped: Bool { true }
-
-    /// An estimate used before the first build; the real height comes from the built content.
     static func preferredSize(mode: AccountPanelMode, accountCount: Int) -> NSSize {
         switch mode {
         case .usage:
@@ -176,11 +53,10 @@ final class AccountSwitcherPanelView: NSView {
         }
     }
 
-    // MARK: - Build
-
-    private var showsTabs: Bool { mode != .routeB }
+    private var showsTabs: Bool { state.mode != .routeB }
 
     private func build() {
+        bodyScrollView = nil
         subviews.forEach { $0.removeFromSuperview() }
         let theme = self.theme
         builtForDark = theme.isDark
@@ -194,7 +70,7 @@ final class AccountSwitcherPanelView: NSView {
 
         let body = FlippedContainerView(frame: NSRect(x: 0, y: 0, width: Self.panelWidth, height: 0))
         let bodyHeight: CGFloat
-        switch mode {
+        switch state.mode {
         case .usage:
             bodyHeight = buildAccountsBody(into: body, theme: theme)
         case .analytics:
@@ -230,6 +106,7 @@ final class AccountSwitcherPanelView: NSView {
             scroll.autohidesScrollers = true
             scroll.scrollerStyle = .overlay
             scroll.documentView = body
+            bodyScrollView = scroll
             content.addSubview(scroll)
             if ProcessInfo.processInfo.environment["CODEX_ACCOUNT_SWITCHER_DEMO"] == "1",
                ProcessInfo.processInfo.environment["CODEX_ACCOUNT_SWITCHER_SCROLL_TO_END"] == "1" {
@@ -243,17 +120,15 @@ final class AccountSwitcherPanelView: NSView {
         content.addSubview(footer)
     }
 
-    // MARK: - Toolbar and tabs
-
     private func buildToolbar(into view: NSView, theme: PanelTheme) -> CGFloat {
         let glyph = TileView(frame: NSRect(x: 16, y: 14, width: 28, height: 28), fill: theme.controlFill, border: theme.controlBorder, cornerRadius: 8)
-        glyph.place(SymbolIconView(frame: .zero, symbol: mode == .routeB ? "point.3.connected.trianglepath.dotted" : "arrow.left.arrow.right", color: theme.primaryText, pointSize: 12), x: 6, y: 6, width: 16, height: 16)
+        glyph.place(SymbolIconView(frame: .zero, symbol: state.mode == .routeB ? "point.3.connected.trianglepath.dotted" : "arrow.left.arrow.right", color: theme.primaryText, pointSize: 12), x: 6, y: 6, width: 16, height: 16)
         view.addSubview(glyph)
 
         var rightEdge = Self.panelWidth - 14
-        if mode == .routeB {
+        if state.mode == .routeB {
             let back = GlassButton(title: "Settings", style: .secondary, theme: theme) { [weak self] in
-                self?.performSettingsAction(.settingsView)
+                self?.actions.performSettingsAction(.settingsView)
             }
             rightEdge -= back.frame.width
             view.place(back, x: rightEdge, y: 14)
@@ -264,23 +139,23 @@ final class AccountSwitcherPanelView: NSView {
             rightEdge -= more.frame.width
             view.place(more, x: rightEdge, y: 14)
 
-            let refreshButton = GlassButton(symbol: "arrow.clockwise", style: .icon, theme: theme, accessibilityLabel: mode == .resets ? "Refresh reset credits" : (mode == .analytics ? "Rescan usage logs" : "Refresh all accounts")) { [weak self] in
+            let refreshButton = GlassButton(symbol: "arrow.clockwise", style: .icon, theme: theme, accessibilityLabel: state.mode == .resets ? "Refresh reset credits" : (state.mode == .analytics ? "Rescan usage logs" : "Refresh all accounts")) { [weak self] in
                 guard let self else { return }
-                if self.mode == .analytics {
-                    self.analytics.refresh()
+                if self.state.mode == .analytics {
+                    self.actions.analytics.refresh()
                     return
                 }
-                if self.mode == .resets {
-                    self.performSettingsAction(.resetCreditsView)
+                if self.state.mode == .resets {
+                    self.actions.performSettingsAction(.resetCreditsView)
                 }
-                self.refresh()
+                self.actions.refresh()
             }
             rightEdge -= refreshButton.frame.width + 8
             view.place(refreshButton, x: rightEdge, y: 14)
         }
 
         let textWidthAvailable = rightEdge - 10 - 54
-        let title = makeLabel(mode == .routeB ? "Route B" : "AI Accounts", size: 13, weight: .semibold, color: theme.primaryText)
+        let title = makeLabel(state.mode == .routeB ? "Route B" : "AI Accounts", size: 13, weight: .semibold, color: theme.primaryText)
         view.place(title, x: 54, y: 12, width: textWidthAvailable)
 
         let (subtitle, isWarning) = toolbarSubtitle()
@@ -291,17 +166,17 @@ final class AccountSwitcherPanelView: NSView {
     }
 
     private func toolbarSubtitle() -> (String, Bool) {
-        switch mode {
+        switch state.mode {
         case .usage:
-            if let lastError, !lastError.isEmpty, activeAccount == nil {
+            if let lastError = state.lastError, !lastError.isEmpty, state.activeAccount == nil {
                 return (lastError, true)
             }
-            if isSwitching || claude.isSwitching {
+            if state.isSwitching || state.claude.isSwitching {
                 return ("Switching accounts…", false)
             }
-            return (lastUpdatedText == "refreshing..." ? "Refreshing…" : "Updated \(lastUpdatedText)", lastUpdatedText.hasPrefix("stale"))
+            return (state.lastUpdatedText == "refreshing..." ? "Refreshing…" : "Updated \(state.lastUpdatedText)", state.lastUpdatedText.hasPrefix("stale"))
         case .analytics:
-            return analytics.subtitle
+            return state.analytics.model(actions: actions.analytics).subtitle
         case .settings:
             let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
             return ("Version \(version)", false)
@@ -313,23 +188,23 @@ final class AccountSwitcherPanelView: NSView {
     }
 
     private func buildTabs(into view: NSView, y: CGFloat, theme: PanelTheme) -> CGFloat {
-        let state = resetCreditsSummaryState()
-        let badge: String? = state.knownTotal > 0 ? "\(state.knownTotal)" : nil
+        let summary = resetCreditsSummaryState()
+        let badge: String? = summary.knownTotal > 0 ? "\(summary.knownTotal)" : nil
         let tabs = SegmentedTabsView(
             frame: NSRect(x: inset, y: y, width: contentWidth, height: 28),
             theme: theme,
             segments: [
-                .init(title: "Accounts", badge: nil, isSelected: mode == .usage) { [weak self] in
-                    self?.performSettingsAction(.usageView)
+                .init(title: "Accounts", badge: nil, isSelected: state.mode == .usage) { [weak self] in
+                    self?.actions.performSettingsAction(.usageView)
                 },
-                .init(title: "Analytics", badge: nil, isSelected: mode == .analytics) { [weak self] in
-                    self?.performSettingsAction(.analyticsView)
+                .init(title: "Analytics", badge: nil, isSelected: state.mode == .analytics) { [weak self] in
+                    self?.actions.performSettingsAction(.analyticsView)
                 },
-                .init(title: "Resets", badge: badge, isSelected: mode == .resets) { [weak self] in
-                    self?.performSettingsAction(.resetCreditsView)
+                .init(title: "Resets", badge: badge, isSelected: state.mode == .resets) { [weak self] in
+                    self?.actions.performSettingsAction(.resetCreditsView)
                 },
-                .init(title: "Settings", badge: nil, isSelected: mode == .settings) { [weak self] in
-                    self?.performSettingsAction(.settingsView)
+                .init(title: "Settings", badge: nil, isSelected: state.mode == .settings) { [weak self] in
+                    self?.actions.performSettingsAction(.settingsView)
                 }
             ]
         )
@@ -363,45 +238,43 @@ final class AccountSwitcherPanelView: NSView {
 
     @objc private func moreMenuItemChosen(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let action = SettingsPanelAction(rawValue: raw) else { return }
-        performSettingsAction(action)
+        actions.performSettingsAction(action)
     }
 
     @objc private func quitPressed() {
-        close()
+        actions.close()
     }
-
-    // MARK: - Footer
 
     private func buildFooter(into view: NSView, theme: PanelTheme) -> CGFloat {
         let height: CGFloat = 48
         view.addSubview(HairlineView(frame: NSRect(x: 0, y: 0, width: Self.panelWidth, height: 0.5), color: theme.hairline))
 
         let quit = GlassButton(symbol: "power", style: .icon, theme: theme, accessibilityLabel: "Quit Account Switcher") { [weak self] in
-            self?.close()
+            self?.actions.close()
         }
         quit.toolTip = "Quit Account Switcher"
         var rightEdge = Self.panelWidth - 12 - quit.frame.width
         view.place(quit, x: rightEdge, y: 10)
 
-        switch mode {
+        switch state.mode {
         case .usage:
-            let autoTitle = autoSwitchMode == .off ? "Auto-switch off" : autoSwitchFooterText()
+            let autoTitle = state.autoSwitchMode == .off ? "Auto-switch off" : autoSwitchFooterText()
             let auto = GlassButton(title: autoTitle, style: .text(theme.secondaryText), theme: theme, height: 22, fontSize: 11) { [weak self] in
-                self?.performSettingsAction(.editAutoSwitch)
+                self?.actions.performSettingsAction(.editAutoSwitch)
             }
             auto.toolTip = "Change automatic switching"
             rightEdge -= auto.frame.width + 6
             view.place(auto, x: rightEdge, y: 13)
 
-            let state = resetCreditsSummaryState()
-            if state.knownTotal > 0 {
-                let text = state.knownTotal == 1 ? "1 reset available" : "\(state.knownTotal) resets available"
+            let summary = resetCreditsSummaryState()
+            if summary.knownTotal > 0 {
+                let text = summary.knownTotal == 1 ? "1 reset available" : "\(summary.knownTotal) resets available"
                 let link = GlassButton(title: text, symbol: "chevron.right", style: .text(theme.text(.blue)), theme: theme, height: 24) { [weak self] in
-                    self?.showResetCredits()
+                    self?.actions.showResetCredits()
                 }
                 view.place(link, x: 9, y: 12)
             } else {
-                let text = state.knownAccounts == 0 ? (state.hasError ? "Resets unavailable" : "Checking resets…") : "No resets available"
+                let text = summary.knownAccounts == 0 ? (summary.hasError ? "Resets unavailable" : "Checking resets…") : "No resets available"
                 view.place(makeLabel(text, size: 12, color: theme.tertiaryText), x: 16, y: 16, width: rightEdge - 24)
             }
         case .analytics:
@@ -417,19 +290,17 @@ final class AccountSwitcherPanelView: NSView {
     }
 
     private func autoSwitchFooterText() -> String {
-        switch autoSwitchMode {
+        switch state.autoSwitchMode {
         case .off: return "Auto-switch off"
-        case .ask: return "Auto-switch asks at \(autoSwitchThreshold)%"
-        case .threshold: return "Auto-switch at \(autoSwitchThreshold)%"
+        case .ask: return "Auto-switch asks at \(state.autoSwitchThreshold)%"
+        case .threshold: return "Auto-switch at \(state.autoSwitchThreshold)%"
         case .zero: return "Auto-switch asks at 0%"
         }
     }
 
-    // MARK: - Analytics
-
     private func buildAnalyticsBody(into body: NSView, theme: PanelTheme) -> CGFloat {
         AnalyticsPanelBuilder(
-            model: analytics,
+            model: state.analytics.model(actions: actions.analytics),
             theme: theme,
             inset: inset,
             width: contentWidth,
@@ -440,14 +311,11 @@ final class AccountSwitcherPanelView: NSView {
             }
         ).build(into: body)
     }
-
-    /// Rebuilds in place for local view state, keeping the scroll offset and the panel's top edge.
     private func rebuildKeepingScroll() {
-        let scrollView = subviews.lazy.flatMap { $0.subviews }.flatMap { $0.subviews }.compactMap { $0 as? NSScrollView }.first
-        let offset = scrollView?.contentView.bounds.origin ?? .zero
+        let offset = bodyScrollView?.contentView.bounds.origin ?? .zero
         let oldHeight = frame.height
         build()
-        if let restored = subviews.lazy.flatMap({ $0.subviews }).flatMap({ $0.subviews }).compactMap({ $0 as? NSScrollView }).first,
+        if let restored = bodyScrollView,
            let document = restored.documentView {
             let maxY = max(0, document.frame.height - restored.contentView.bounds.height)
             restored.contentView.scroll(to: NSPoint(x: 0, y: min(offset.y, maxY)))
@@ -460,1045 +328,4 @@ final class AccountSwitcherPanelView: NSView {
         window.setFrame(windowFrame, display: true)
     }
 
-    // MARK: - Accounts
-
-    private func buildAccountsBody(into body: NSView, theme: PanelTheme) -> CGFloat {
-        var y = sectionHeader("Codex", logo: "logo-openai", addLabel: "Add Codex account", add: { [weak self] in self?.performSettingsAction(.addAccount) }, into: body, y: 0, theme: theme)
-        y = buildCodexCards(into: body, y: y, theme: theme)
-        y = sectionHeader("Claude", logo: "logo-claude", addLabel: "Add Claude account", add: { [weak self] in self?.claude.signIn(nil) }, into: body, y: y + 6, theme: theme)
-        y = buildClaudeCards(into: body, y: y, theme: theme)
-        guard cursor.isInstalled else { return y }
-        y = sectionHeader("Cursor", logo: "logo-cursor", addLabel: nil, add: {}, into: body, y: y + 6, theme: theme)
-        return buildCursorCard(into: body, y: y, theme: theme)
-    }
-
-    private func sectionHeader(_ title: String, logo: String, addLabel: String?, add: @escaping () -> Void, into body: NSView, y: CGFloat, theme: PanelTheme) -> CGFloat {
-        let height: CGFloat = 24
-        if let image = MenuBarGlyph.logo(logo, size: 13, color: logo == "logo-claude" ? MenuBarGlyph.claudeOrange : (theme.isDark ? .white : theme.primaryText)) {
-            let view = NSImageView(frame: NSRect(x: inset + 4, y: y + (height - 13) / 2, width: 13, height: 13))
-            view.image = image
-            body.addSubview(view)
-        }
-        let label = makeLabel(title, size: 11.5, weight: .semibold, color: theme.secondaryText)
-        body.place(label, x: inset + 23, y: y + (height - label.frame.height) / 2, width: 120)
-        if let addLabel {
-            let button = GlassButton(symbol: "plus", style: .icon, theme: theme, height: 24, fontSize: 10, accessibilityLabel: addLabel, onPress: add)
-            button.toolTip = addLabel
-            body.place(button, x: Self.panelWidth - inset - button.frame.width, y: y + (height - button.frame.height) / 2)
-        }
-        return y + height + 6
-    }
-
-    private func buildCodexCards(into body: NSView, y startY: CGFloat, theme: PanelTheme) -> CGFloat {
-        var y = startY
-        guard !accounts.isEmpty else {
-            let tile = emptyAccountsTile(theme: theme, y: y)
-            body.addSubview(tile)
-            return tile.frame.maxY + 8
-        }
-        let active = activeAccount ?? accounts.first(where: { $0.isActive })
-        let others = orderedAccounts().filter { $0.email != active?.email }
-        for (index, account) in ((active.map { [$0] } ?? []) + others).enumerated() {
-            let card = codexCard(account, divider: index > 0, theme: theme, y: y)
-            body.addSubview(card)
-            y = card.frame.maxY
-        }
-        return y + 8
-    }
-
-    private func codexCard(_ account: CodexAccount, divider: Bool, theme: PanelTheme, y: CGFloat) -> NSView {
-        let needsLogin = accountNeedsLogin(account)
-        let snapshot = codexUsageByEmail[account.email]
-        let isArmed = confirmBeforeSwitching && armedSwitchEmail == account.email && !isSwitching
-        var trailing: [GlassButton] = []
-        if needsLogin {
-            trailing = [GlassButton(title: "Sign In…", style: .secondary, theme: theme, height: 24, fontSize: 12) { [weak self] in
-                self?.performSettingsAction(.addAccount)
-            }]
-        } else if isArmed {
-            trailing = [
-                GlassButton(title: "Cancel", style: .secondary, theme: theme, height: 24, fontSize: 12) { [weak self] in
-                    self?.performSettingsAction(.usageView)
-                },
-                GlassButton(title: "Confirm", style: .primary, theme: theme, height: 24, fontSize: 12) { [weak self] in
-                    self?.switchAccount(account.email)
-                }
-            ]
-        }
-        return usageCard(
-            UsageCard(
-                title: account.email,
-                detail: account.planLabel,
-                isActive: account.isActive,
-                needsLogin: needsLogin,
-                windows: (account.hasFiveHourLimit ? [
-                    ("5h", account.fiveHourUsedPercent, snapshot.map { MenuBarGlyph.relativeReset($0.fiveHour.resetAt) ?? "" } ?? fiveHourResetText(from: account.fiveHourUsage))
-                ] : []) + [
-                    ("7d", account.weeklyUsedPercent, snapshot.map { MenuBarGlyph.relativeReset($0.weekly.resetAt) ?? "" } ?? weeklyResetText(from: account.weeklyUsage))
-                ],
-                tooltip: switchPreviewText(for: account),
-                switchAction: account.isActive || needsLogin || isArmed || isSwitching ? nil : { [weak self] in self?.switchAccount(account.email) }
-            ),
-            trailing: trailing,
-            divider: divider,
-            theme: theme,
-            y: y
-        )
-    }
-
-    // MARK: - Usage card
-
-    private struct UsageCard {
-        let title: String
-        let detail: String
-        let isActive: Bool
-        let needsLogin: Bool
-        let windows: [(String, Int?, String)]
-        let tooltip: String?
-        let switchAction: (() -> Void)?
-    }
-
-    /// A flat row: name line (active dot, title, detail, status) above one bar per usage window.
-    private func usageCard(_ card: UsageCard, trailing: [GlassButton], divider: Bool, theme: PanelTheme, y: CGFloat) -> NSView {
-        let headerHeight: CGFloat = 22
-        let rowHeight: CGFloat = 18
-        let padding: CGFloat = 9
-        let bodyRows = card.needsLogin ? 1 : card.windows.count
-        let height = padding + headerHeight + 4 + CGFloat(bodyRows) * rowHeight + padding
-        let row = TileView(
-            frame: NSRect(x: inset, y: y, width: contentWidth, height: height),
-            fill: .clear,
-            border: .clear,
-            borderWidth: 0,
-            cornerRadius: 8,
-            hoverFill: card.switchAction == nil ? nil : theme.tileHoverFill,
-            accessibilityLabel: card.switchAction == nil ? nil : "Switch to \(card.title)",
-            action: card.switchAction
-        )
-        row.toolTip = card.tooltip
-        row.alphaValue = card.isActive ? 1 : 0.5
-        if divider {
-            row.addSubview(HairlineView(frame: NSRect(x: 6, y: 0, width: contentWidth - 12, height: 0.5), color: theme.hairline))
-        }
-
-        var rightEdge = contentWidth - 6
-        for button in trailing.reversed() {
-            rightEdge -= button.frame.width
-            row.place(button, x: rightEdge, y: padding + (headerHeight - button.frame.height) / 2)
-            rightEdge -= 6
-        }
-        if card.needsLogin {
-            let tag = CapsuleTagView(text: "Signed out", theme: theme, foreground: theme.text(.red), background: theme.tint(.red))
-            rightEdge -= tag.frame.width
-            row.place(tag, x: rightEdge, y: padding + (headerHeight - tag.frame.height) / 2)
-            rightEdge -= 8
-        }
-
-        let textX: CGFloat = card.isActive ? 18 : 6
-        if card.isActive {
-            let dot = NSView(frame: NSRect(x: 6, y: padding + (headerHeight - 6) / 2, width: 6, height: 6))
-            dot.wantsLayer = true
-            dot.layer?.cornerRadius = 3
-            dot.layer?.backgroundColor = theme.accent.cgColor
-            row.addSubview(dot)
-        }
-        let available = rightEdge - textX
-        let title = makeLabel(card.title, size: 13, weight: .semibold, color: theme.primaryText)
-        let detail = makeLabel(card.detail, size: 11, color: theme.secondaryText)
-        let titleWidth = min(title.frame.width, available - min(detail.frame.width, 56) - 8)
-        title.toolTip = card.title
-        row.place(title, x: textX, y: padding + (headerHeight - title.frame.height) / 2, width: titleWidth)
-        detail.toolTip = card.detail
-        let detailX = textX + titleWidth + 8
-        if available - (detailX - textX) > 24 {
-            row.place(detail, x: detailX, y: padding + (headerHeight - detail.frame.height) / 2 + 1, width: available - (detailX - textX))
-        }
-
-        var rowY = padding + headerHeight + 4
-        if card.needsLogin {
-            row.place(makeLabel("Session expired · usage unavailable", size: 11, color: theme.secondaryText), x: 6, y: rowY + 2, width: contentWidth - 12)
-            return row
-        }
-        for (label, percent, reset) in card.windows {
-            row.addSubview(UsageBarRowView(
-                frame: NSRect(x: 6, y: rowY, width: contentWidth - 12, height: rowHeight),
-                label: label,
-                percent: percent,
-                reset: reset,
-                color: theme.color(PanelTheme.usageTone(for: percent)),
-                theme: theme
-            ))
-            rowY += rowHeight
-        }
-        return row
-    }
-
-    private func emptyAccountsTile(theme: PanelTheme, y: CGFloat) -> NSView {
-        let tile = TileView(frame: NSRect(x: inset, y: y, width: contentWidth, height: 150), fill: theme.tileFill, border: theme.tileBorder)
-        tile.addSubview(MonogramView(frame: NSRect(x: 12, y: 14, width: 32, height: 32), text: "", fill: theme.tint(.blue), textColor: theme.text(.blue), symbol: "person.crop.circle.badge.plus"))
-        tile.place(makeLabel("No saved accounts", size: 13, weight: .semibold, color: theme.primaryText), x: 52, y: 15, width: contentWidth - 64)
-        tile.place(makeLabel("Sign in once for each ChatGPT account.", size: 11, color: theme.secondaryText), x: 52, y: 33, width: contentWidth - 64)
-        if let lastError, !lastError.isEmpty {
-            let error = makeLabel(lastError, size: 11, color: theme.text(.orange))
-            error.toolTip = lastError
-            tile.place(error, x: 12, y: 64, width: contentWidth - 24)
-        }
-        let add = GlassButton(title: "Add Account…", style: .primary, theme: theme) { [weak self] in
-            self?.performSettingsAction(.addAccount)
-        }
-        tile.place(add, x: 12, y: 108)
-        let device = GlassButton(title: "Device Login…", style: .secondary, theme: theme) { [weak self] in
-            self?.performSettingsAction(.addDeviceAccount)
-        }
-        tile.place(device, x: 12 + add.frame.width + 8, y: 108)
-        return tile
-    }
-
-    // MARK: - Resets
-
-    private func buildResetsBody(into body: NSView, theme: PanelTheme) -> CGFloat {
-        var y: CGFloat = 0
-        let summary = resetSummaryTile(theme: theme, y: y)
-        body.addSubview(summary)
-        y = summary.frame.maxY + 14
-
-        if !accounts.isEmpty {
-            body.place(makeLabel(claudeResetAccounts.isEmpty ? "By account" : "Codex", size: 11, weight: .semibold, color: theme.secondaryText), x: inset + 4, y: y, width: 200)
-            y += 20
-            for account in orderedAccounts() {
-                let group = resetAccountGroup(account, theme: theme, y: y)
-                body.addSubview(group)
-                y = group.frame.maxY + 10
-            }
-        }
-        if !claudeResetAccounts.isEmpty {
-            body.place(makeLabel("Claude", size: 11, weight: .semibold, color: theme.secondaryText), x: inset + 4, y: y, width: 200)
-            y += 20
-            for account in claudeResetAccounts {
-                let group = claudeResetGroup(account, theme: theme, y: y)
-                body.addSubview(group)
-                y = group.frame.maxY + 10
-            }
-        }
-        return y + 2
-    }
-
-    /// Claude accounts, active first, that are signed in.
-    private var claudeResetAccounts: [ClaudeAccountSummary] {
-        claude.accounts.filter { !$0.needsLogin }.sorted { $0.isActive && !$1.isActive }
-    }
-
-    private func claudeResetGroup(_ account: ClaudeAccountSummary, theme: PanelTheme, y: CGFloat) -> NSView {
-        let grants = account.resets?.grants ?? []
-        let rowHeight: CGFloat = 40
-        let group = TileView(frame: NSRect(x: inset, y: y, width: contentWidth, height: rowHeight * CGFloat(1 + max(1, grants.count))), fill: theme.tileFill, border: theme.tileBorder)
-
-        let countText: String
-        if let resets = account.resets {
-            countText = account.isActive ? "Active · \(resets.availableCount)" : "\(resets.availableCount)"
-        } else {
-            countText = account.usageError != nil ? "Unavailable" : "Checking…"
-        }
-        let tag = CapsuleTagView(text: countText, theme: theme, foreground: theme.secondaryText, background: theme.controlFill)
-        group.place(tag, x: contentWidth - 12 - tag.frame.width, y: 11)
-        if account.isActive {
-            group.addSubview(DotView(frame: NSRect(x: 14, y: 17, width: 7, height: 7), color: theme.color(.green)))
-        }
-        let name = makeLabel("\(account.title) · \(account.email)", size: 12.5, weight: .semibold, color: theme.primaryText)
-        name.lineBreakMode = .byTruncatingTail
-        group.place(name, x: 28, y: 12, width: contentWidth - 28 - tag.frame.width - 22)
-
-        var rowY = rowHeight
-        group.addSubview(HairlineView(frame: NSRect(x: 12, y: rowY, width: contentWidth - 24, height: 0.5), color: theme.hairline))
-        guard account.resets != nil, !grants.isEmpty else {
-            let text: String
-            if account.resets == nil {
-                text = account.usageError.map { "Couldn’t check · \($0)" } ?? "Checking resets…"
-            } else {
-                text = "No resets available"
-            }
-            let label = makeLabel(text, size: 11.5, color: account.resets == nil && account.usageError != nil ? theme.text(.orange) : theme.secondaryText)
-            label.toolTip = account.resets?.ineligibleReason.map { "Not offered: \($0)" } ?? account.usageError
-            group.place(label, x: 12, y: rowY + 12, width: contentWidth - 24)
-            return group
-        }
-        for (index, grant) in grants.enumerated() {
-            if index > 0 {
-                group.addSubview(HairlineView(frame: NSRect(x: 12, y: rowY, width: contentWidth - 24, height: 0.5), color: theme.hairline))
-            }
-            let days = daysLeft(until: grant.endsAt)
-            let tone = days.map { urgencyTone(days: $0) } ?? .blue
-            let dueText = days.map { daysLeftText($0) } ?? (grant.program == ClaudeResetGrant.fiveHourProgram ? "1/week" : "no expiry")
-            let due = CapsuleTagView(text: dueText, theme: theme, foreground: theme.text(tone), background: theme.tint(tone), height: 20, fontSize: 11, fixedWidth: 64)
-            group.place(due, x: 12, y: rowY + 10)
-
-            let use = GlassButton(title: "Use", style: .use, theme: theme, height: 24, fontSize: 11.5, accessibilityLabel: "Use Claude \(grant.title) for \(account.title)") { [weak self] in
-                self?.claude.useReset(account.id, grant.id)
-            }
-            use.isEnabled = grant.usableNow && !claude.isClaimingReset && !claude.isSwitching
-            use.toolTip = grant.unavailableText ?? "Use this reset after confirmation"
-            let useX = contentWidth - 12 - use.frame.width
-            group.place(use, x: useX, y: rowY + 8)
-
-            var text = grant.title
-            if !grant.clearedText.isEmpty, !grant.title.lowercased().hasPrefix(grant.clearedText) {
-                text += " · \(grant.clearedText)"
-            }
-            if grant.resetsLeft > 1 { text += " · ×\(grant.resetsLeft)" }
-            if let unavailable = grant.unavailableText { text += " · \(unavailable)" }
-            let label = makeLabel(text, size: 12, color: grant.usableNow ? theme.primaryText : theme.secondaryText)
-            label.lineBreakMode = .byTruncatingTail
-            label.toolTip = [grant.label, grant.endsAt.map { "Use by \(DateFormatter.resetCreditDisplay.string(from: $0))" }]
-                .compactMap { $0?.isEmpty == false ? $0 : nil }.joined(separator: "\n")
-            group.place(label, x: 86, y: rowY + 12, width: useX - 96)
-            rowY += rowHeight
-        }
-        return group
-    }
-
-    private func resetSummaryTile(theme: PanelTheme, y: CGFloat) -> NSView {
-        let state = resetCreditsSummaryState()
-        let codexExpiries = accounts.flatMap { account in
-            (resetCreditsByEmail[account.email].map { sortedAvailableResetCredits($0) } ?? []).map(\.expiresAt)
-        }
-        let claudeExpiries = claudeResetAccounts.flatMap { account in
-            (account.resets?.grants ?? []).flatMap { Array(repeating: $0.endsAt, count: $0.resetsLeft) }
-        }
-        let expiries = codexExpiries + claudeExpiries
-        let days = expiries.compactMap { daysLeft(until: $0) }
-        let urgent = days.filter { $0 <= 7 }.count
-        let soon = days.filter { $0 > 7 && $0 <= 20 }.count
-        let later = expiries.count - urgent - soon
-        let hasBreakdown = !expiries.isEmpty
-
-        let height: CGFloat = hasBreakdown ? 118 : 76
-        let tile = TileView(frame: NSRect(x: inset, y: y, width: contentWidth, height: height), fill: theme.tileFill, border: theme.tileBorder)
-        tile.place(makeLabel("Available resets", size: 11, color: theme.secondaryText), x: 14, y: 13, width: 160)
-
-        let countText = state.knownAccounts == 0 && !state.hasError ? "…" : "\(state.knownTotal)"
-        let count = makeLabel(countText, size: 34, weight: .semibold, color: theme.primaryText, monospacedDigits: true, kern: -1)
-        tile.place(count, x: 13, y: 28)
-        let accountsWithCredits = accounts.filter { (resetCreditsByEmail[$0.email]?.displayCount ?? 0) > 0 }.count
-            + claudeResetAccounts.filter { ($0.resets?.availableCount ?? 0) > 0 }.count
-        let across = state.knownTotal == 0
-            ? (state.hasError ? "some accounts could not be checked" : "none right now")
-            : (accountsWithCredits == 1 ? "on 1 account" : "across \(accountsWithCredits) accounts")
-        let acrossLabel = makeLabel(across, size: 12, color: theme.secondaryText)
-        tile.place(acrossLabel, x: count.frame.maxX + 8, y: count.frame.maxY - acrossLabel.frame.height - 5, width: 170)
-
-        if let next = expiries.compactMap({ $0 }).min(), let nextDays = daysLeft(until: next) {
-            let tone = urgencyTone(days: nextDays)
-            let dateText = DateFormatter.resetCreditShortDate.string(from: next)
-            let capsule = CapsuleTagView(text: "\(dateText) · \(daysLeftText(nextDays))", theme: theme, foreground: theme.text(tone), background: theme.tint(tone), height: 20, fontSize: 11)
-            tile.place(capsule, x: contentWidth - 14 - capsule.frame.width, y: 38)
-            let caption = makeLabel("Next expiry", size: 11, color: theme.secondaryText, alignment: .right)
-            tile.place(caption, x: contentWidth - 14 - 120, y: 13, width: 120)
-        }
-
-        if hasBreakdown {
-            let bar = StackedBarView(frame: NSRect(x: 14, y: 78, width: contentWidth - 28, height: 6), segments: [
-                (CGFloat(urgent), theme.color(.red)),
-                (CGFloat(soon), theme.color(.orange)),
-                (CGFloat(later), theme.color(.green))
-            ])
-            tile.addSubview(bar)
-            var x: CGFloat = 14
-            for (value, text, tone) in [(urgent, "within a week", PanelTheme.Tone.red), (soon, "within 20 days", .orange), (later, "later", .green)] where value > 0 {
-                tile.addSubview(DotView(frame: NSRect(x: x, y: 96, width: 7, height: 7), color: theme.color(tone)))
-                let legend = makeLabel("\(value) \(text)", size: 10.5, color: theme.secondaryText, monospacedDigits: true)
-                tile.place(legend, x: x + 11, y: 92)
-                x += 11 + legend.frame.width + 14
-            }
-        }
-        return tile
-    }
-
-    private func resetAccountGroup(_ account: CodexAccount, theme: PanelTheme, y: CGFloat) -> NSView {
-        let snapshot = resetCreditsByEmail[account.email]
-        let credits = snapshot.map { sortedAvailableResetCredits($0) } ?? []
-        let rowHeight: CGFloat = 40
-        let bodyRows = max(1, credits.count)
-        let group = TileView(frame: NSRect(x: inset, y: y, width: contentWidth, height: rowHeight * CGFloat(1 + bodyRows)), fill: theme.tileFill, border: theme.tileBorder)
-
-        let tone: PanelTheme.Tone = account.isActive ? PanelTheme.usageTone(for: account.fiveHourUsedPercent) : .neutral
-        group.addSubview(MonogramView(frame: NSRect(x: 12, y: 8, width: 24, height: 24), text: labelForAccount(account), fill: account.isActive ? theme.tint(tone) : theme.controlFill, textColor: theme.text(tone)))
-        let countText: String
-        if let count = snapshot?.displayCount {
-            countText = account.isActive ? "Active · \(count)" : "\(count)"
-        } else {
-            countText = snapshot?.lastError != nil ? "Unavailable" : "Checking…"
-        }
-        let tag = CapsuleTagView(text: countText, theme: theme, foreground: theme.secondaryText, background: theme.controlFill)
-        group.place(tag, x: contentWidth - 12 - tag.frame.width, y: 11)
-        group.place(makeLabel(account.email, size: 12.5, weight: .semibold, color: theme.primaryText), x: 44, y: 12, width: contentWidth - 44 - tag.frame.width - 22)
-
-        var rowY = rowHeight
-        group.addSubview(HairlineView(frame: NSRect(x: 12, y: rowY, width: contentWidth - 24, height: 0.5), color: theme.hairline))
-
-        if let error = snapshot?.lastError {
-            let label = makeLabel("Couldn’t check · \(error)", size: 11.5, color: theme.text(.orange))
-            label.toolTip = error
-            group.place(label, x: 12, y: rowY + 12, width: contentWidth - 24)
-            return group
-        }
-        guard snapshot != nil else {
-            group.place(makeLabel("Checking reset credits…", size: 11.5, color: theme.secondaryText), x: 12, y: rowY + 12, width: contentWidth - 24)
-            return group
-        }
-        guard !credits.isEmpty else {
-            group.place(makeLabel("No resets available", size: 11.5, color: theme.secondaryText), x: 12, y: rowY + 12, width: contentWidth - 24)
-            return group
-        }
-
-        for (index, credit) in credits.enumerated() {
-            if index > 0 {
-                group.addSubview(HairlineView(frame: NSRect(x: 12, y: rowY, width: contentWidth - 24, height: 0.5), color: theme.hairline))
-            }
-            let days = resetCreditDaysLeft(credit)
-            let tone = days.map { urgencyTone(days: $0) } ?? .blue
-            let due = CapsuleTagView(text: days.map { daysLeftText($0) } ?? "unknown", theme: theme, foreground: theme.text(tone), background: theme.tint(tone), height: 20, fontSize: 11, fixedWidth: 64)
-            group.place(due, x: 12, y: rowY + 10)
-
-            let use = GlassButton(title: "Use", style: .use, theme: theme, height: 24, fontSize: 11.5, accessibilityLabel: "Use reset expiring \(resetCreditExpiryText(credit))") { [weak self] in
-                self?.redeemResetCredit(account.email, credit.id)
-            }
-            use.toolTip = "Redeem this reset credit after confirmation"
-            use.isEnabled = !isSwitching
-            let useX = contentWidth - 12 - use.frame.width
-            group.place(use, x: useX, y: rowY + 8)
-
-            let date = makeLabel(resetCreditExpiryText(credit), size: 12, color: theme.primaryText, monospacedDigits: true)
-            date.toolTip = "Granted \(credit.grantedAt.map { DateFormatter.resetCreditDisplay.string(from: $0) } ?? "unknown")"
-            group.place(date, x: 86, y: rowY + 12, width: useX - 96)
-            rowY += rowHeight
-        }
-        return group
-    }
-
-    private func resetCreditsSubtitle() -> String {
-        let state = resetCreditsSummaryState()
-        if state.knownAccounts == 0 {
-            return state.hasError ? "Some accounts could not be checked" : "Checking saved accounts…"
-        }
-        if state.hasError {
-            return "Some accounts could not be checked"
-        }
-        let count = accounts.count + claudeResetAccounts.count
-        return "Reset credits for \(count == 1 ? "1 account" : "\(count) accounts")"
-    }
-
-    private func urgencyTone(days: Int) -> PanelTheme.Tone {
-        if days <= 7 { return .red }
-        if days <= 20 { return .orange }
-        return .green
-    }
-
-    private func daysLeftText(_ days: Int) -> String {
-        if days <= 0 { return "today" }
-        return days == 1 ? "1 day" : "\(days) days"
-    }
-
-    private func resetCreditExpiryText(_ credit: ResetCredit) -> String {
-        credit.expiresAt.map { DateFormatter.resetCreditDisplay.string(from: $0) } ?? "Unknown expiry"
-    }
-
-    private func resetCreditDaysLeft(_ credit: ResetCredit) -> Int? {
-        daysLeft(until: credit.expiresAt)
-    }
-
-    private func daysLeft(until date: Date?) -> Int? {
-        guard let date else { return nil }
-        return max(0, Int(ceil(date.timeIntervalSince(Date()) / 86_400)))
-    }
-
-    private func sortedAvailableResetCredits(_ snapshot: ResetCreditsSnapshot) -> [ResetCredit] {
-        snapshot.availableCredits.sorted { left, right in
-            switch (left.expiresAt, right.expiresAt) {
-            case let (left?, right?): return left < right
-            case (.some, nil): return true
-            case (nil, .some): return false
-            case (nil, nil): return left.title.localizedCaseInsensitiveCompare(right.title) == .orderedAscending
-            }
-        }
-    }
-
-    private func resetCreditsSummaryState() -> (knownTotal: Int, knownAccounts: Int, hasError: Bool) {
-        let snapshots = accounts.compactMap { resetCreditsByEmail[$0.email] }
-        let knownCounts = snapshots.compactMap { $0.displayCount } + claudeResetAccounts.compactMap { $0.resets?.availableCount }
-        let claudeError = claudeResetAccounts.contains { $0.resets == nil && $0.usageError != nil }
-        return (knownCounts.reduce(0, +), knownCounts.count, claudeError || snapshots.contains { $0.lastError != nil })
-    }
-
-    // MARK: - Settings
-
-    private struct SettingsRow {
-        let height: CGFloat
-        let build: (NSView, CGFloat) -> Void
-    }
-
-    private func buildSettingsBody(into body: NSView, theme: PanelTheme) -> CGFloat {
-        var y: CGFloat = 0
-
-        let cursorRow: [SettingsRow] = cursor.isInstalled ? [segmentedRow("Cursor", options: [
-            ("Off", cursorLane == .off, .cursorBarOff),
-            ("Auto", cursorLane == .auto, .cursorBarAuto),
-            ("API", cursorLane == .api, .cursorBarApi),
-            ("Both", cursorLane == .both, .cursorBarBoth)
-        ], theme: theme)] : []
-        y = addSection("Menu bar", rows: [
-            segmentedRow("Codex", options: [
-                ("Off", usageMode == .off, .usageOff),
-                ("5-hour", usageMode == .fiveHour, .usageFiveHour),
-                ("Weekly", usageMode == .weekly, .usageWeekly),
-                ("Both", usageMode == .both, .usageBoth)
-            ], theme: theme),
-            segmentedRow("Claude", options: [
-                ("Off", claudeUsageMode == .off, .claudeUsageOff),
-                ("5-hour", claudeUsageMode == .fiveHour, .claudeUsageFiveHour),
-                ("Weekly", claudeUsageMode == .weekly, .claudeUsageWeekly),
-                ("Both", claudeUsageMode == .both, .claudeUsageBoth)
-            ], theme: theme),
-        ] + cursorRow + [
-            segmentedRow("Size", options: [
-                ("Large", toolbarDisplayStyle == .detailed, .styleDetailed),
-                ("Small", toolbarDisplayStyle == .compact, .styleCompact)
-            ], theme: theme),
-            menuBarPreviewRow(theme: theme)
-        ], into: body, y: y, theme: theme)
-
-        y = addSection("Automation", rows: [
-            toggleRow("Follow ChatGPT", detail: "Show only while ChatGPT is open", isOn: launchAtLoginEnabled, action: .toggleLaunchAtLogin, theme: theme),
-            toggleRow("Usage reminder", detail: "Alert when Codex or Claude runs low", isOn: remindersEnabled, action: .toggleUsageReminder, popup: ("at \(reminderThreshold)%", .editUsageReminder), theme: theme),
-            toggleRow("Auto-switch", detail: "Switch Codex and Claude when low", isOn: autoSwitchMode != .off, action: .toggleAutoSwitch, popup: (autoSwitchPopupText(), .editAutoSwitch), theme: theme),
-            popupRow("Auto-resume", detail: "Continue the Codex task after a switch", value: autoResumeText(), action: .editAutoResume, theme: theme),
-            toggleRow("Reopen on same desktop", detail: "Relaunch Codex on the desktop it was on, not the current one", isOn: SpaceRestorer.isEnabled, action: .toggleReopenOnSameDesktop, theme: theme),
-            toggleRow("Toast on limit reset", detail: "Show a brief message when a limit resets", isOn: Celebration.toastEnabled, action: .toggleToastOnReset, theme: theme),
-            toggleRow("Fireworks on limit reset", detail: "Celebrate when a limit refills after you were near it", isOn: Celebration.confettiEnabled, action: .toggleConfettiOnReset, theme: theme),
-            popupRow("Test celebration", detail: "Play the toast and fireworks now", value: "Play", action: .testCelebration, theme: theme),
-            toggleRow("Confirm before switching", detail: "Click once to arm, again to relaunch", isOn: confirmBeforeSwitching, action: .toggleConfirmSwitch, theme: theme)
-        ], into: body, y: y, theme: theme)
-
-        var accountRows = orderedAccounts().map { settingsAccountRow($0, theme: theme) }
-        accountRows.append(navRow("Add Account…", value: "Browser sign-in", symbol: "plus", tint: .blue, action: .addAccount, theme: theme))
-        accountRows.append(navRow("Device Login…", value: "Code on another device", symbol: "desktopcomputer", tint: .neutral, action: .addDeviceAccount, theme: theme))
-        y = addSection("Codex accounts", rows: accountRows, into: body, y: y, theme: theme)
-
-        var claudeRows = claude.accounts.map { settingsClaudeRow($0, theme: theme) }
-        claudeRows.append(navRow("Add Claude Account…", value: "claude auth login", symbol: "plus", tint: .blue, action: .addClaudeAccount, theme: theme))
-        y = addSection("Claude accounts", rows: claudeRows, into: body, y: y, theme: theme)
-
-        y = addSection("Health", rows: [healthRow(theme: theme)], into: body, y: y, theme: theme)
-
-        y = addSection("General", rows: [
-            navRow("Refresh rate", value: "\(activeRefreshInterval)s active · \(idleRefreshInterval)s idle", action: .editRefresh, theme: theme),
-            updatesRow(theme: theme),
-            navRow("Diagnostics", value: "Privacy-safe report", action: .diagnostics, theme: theme),
-            navRow("Route B profiles", value: nil, tag: "Preview", action: .routeBView, theme: theme)
-        ], into: body, y: y, theme: theme)
-        return y
-    }
-
-    private func addSection(_ title: String, rows: [SettingsRow], into body: NSView, y: CGFloat, theme: PanelTheme) -> CGFloat {
-        let header = makeLabel(title, size: 11, weight: .semibold, color: theme.secondaryText)
-        body.place(header, x: inset + 4, y: y, width: 200)
-        let groupY = y + header.frame.height + 6
-        let height = rows.reduce(0) { $0 + $1.height }
-        let group = TileView(frame: NSRect(x: inset, y: groupY, width: contentWidth, height: height), fill: theme.tileFill, border: theme.tileBorder)
-        var rowY: CGFloat = 0
-        for (index, row) in rows.enumerated() {
-            let container = FlippedContainerView(frame: NSRect(x: 0, y: rowY, width: contentWidth, height: row.height))
-            row.build(container, contentWidth)
-            if index > 0 {
-                container.addSubview(HairlineView(frame: NSRect(x: 12, y: 0, width: contentWidth - 12, height: 0.5), color: theme.hairline))
-            }
-            group.addSubview(container)
-            rowY += row.height
-        }
-        body.addSubview(group)
-        return group.frame.maxY + 16
-    }
-
-    private func segmentedRow(_ title: String, options: [(String, Bool, SettingsPanelAction)], theme: PanelTheme) -> SettingsRow {
-        SettingsRow(height: 40) { [weak self] row, width in
-            let label = makeLabel(title, size: 12.5, weight: .medium, color: theme.primaryText)
-            let controlWidth = max(150, CGFloat(options.count) * 62)
-            row.place(label, x: 12, y: (40 - label.frame.height) / 2, width: width - controlWidth - 30)
-            let segments = options.map { option in
-                SegmentedTabsView.Segment(title: option.0, badge: nil, isSelected: option.1) { self?.performSettingsAction(option.2) }
-            }
-            row.addSubview(SegmentedTabsView(frame: NSRect(x: width - 12 - controlWidth, y: 8, width: controlWidth, height: 24), theme: theme, segments: segments, fontSize: 11.5))
-        }
-    }
-
-    private func menuBarPreviewRow(theme: PanelTheme) -> SettingsRow {
-        let compact = toolbarDisplayStyle == .compact
-        let title = MenuBarGlyph.usageTitle(menuBarPreview, fontSize: compact ? 11 : 12.5, compact: compact, textColor: theme.primaryText, lowColor: theme.text(.red), separatorColor: theme.secondaryText)
-        let text = NSTextField(labelWithAttributedString: title.length == 0 ? NSAttributedString(string: "–") : title)
-        text.sizeToFit()
-        let chipWidth = text.frame.width + 20
-        let chipHeight = max(24, text.frame.height + 8)
-        let labelWidth: CGFloat = 70
-        // The label and chip share a line only when both fit; otherwise the chip drops below the label.
-        let stacked = chipWidth + labelWidth + 36 > contentWidth
-        return SettingsRow(height: stacked ? 28 + chipHeight + 8 : max(40, chipHeight + 16)) { row, width in
-            let label = makeLabel("Preview", size: 12.5, weight: .medium, color: theme.primaryText)
-            let chipY: CGFloat
-            if stacked {
-                row.place(label, x: 12, y: 8, width: labelWidth)
-                chipY = 28
-            } else {
-                row.place(label, x: 12, y: (row.frame.height - label.frame.height) / 2, width: labelWidth)
-                chipY = (row.frame.height - chipHeight) / 2
-            }
-            let chip = TileView(frame: NSRect(x: max(12, width - 12 - chipWidth), y: chipY, width: chipWidth, height: chipHeight), fill: theme.isDark ? NSColor.black.withAlphaComponent(0.30) : NSColor.black.withAlphaComponent(0.07), cornerRadius: 6)
-            chip.place(text, x: 10, y: (chipHeight - text.frame.height) / 2)
-            row.addSubview(chip)
-        }
-    }
-
-    private func toggleRow(_ title: String, detail: String, isOn: Bool, action: SettingsPanelAction, popup: (String, SettingsPanelAction)? = nil, theme: PanelTheme) -> SettingsRow {
-        SettingsRow(height: 50) { [weak self] row, width in
-            let toggle = ToggleSwitch(isOn: isOn, theme: theme, accessibilityLabel: title) { self?.performSettingsAction(action) }
-            var rightEdge = width - 12 - toggle.frame.width
-            row.place(toggle, x: rightEdge, y: 15)
-            if let popup {
-                let button = GlassButton(title: popup.0, style: .popup, theme: theme, height: 22, fontSize: 11.5) { self?.performSettingsAction(popup.1) }
-                rightEdge -= button.frame.width + 10
-                row.place(button, x: rightEdge, y: 14)
-            }
-            row.place(makeLabel(title, size: 12.5, weight: .medium, color: theme.primaryText), x: 12, y: 8, width: rightEdge - 22)
-            row.place(makeLabel(detail, size: 11, color: theme.secondaryText), x: 12, y: 26, width: rightEdge - 22)
-        }
-    }
-
-    private func popupRow(_ title: String, detail: String, value: String, action: SettingsPanelAction, theme: PanelTheme) -> SettingsRow {
-        SettingsRow(height: 50) { [weak self] row, width in
-            let button = GlassButton(title: value, style: .popup, theme: theme, height: 22, fontSize: 11.5) { self?.performSettingsAction(action) }
-            let rightEdge = width - 12 - button.frame.width
-            row.place(button, x: rightEdge, y: 14)
-            row.place(makeLabel(title, size: 12.5, weight: .medium, color: theme.primaryText), x: 12, y: 8, width: rightEdge - 22)
-            row.place(makeLabel(detail, size: 11, color: theme.secondaryText), x: 12, y: 26, width: rightEdge - 22)
-        }
-    }
-
-    private func settingsAccountRow(_ account: CodexAccount, theme: PanelTheme) -> SettingsRow {
-        SettingsRow(height: 42) { [weak self] row, width in
-            guard let self else { return }
-            let tone: PanelTheme.Tone = account.isActive ? PanelTheme.usageTone(for: account.fiveHourUsedPercent) : .neutral
-            row.addSubview(MonogramView(frame: NSRect(x: 12, y: 9, width: 24, height: 24), text: self.labelForAccount(account), fill: account.isActive ? theme.tint(tone) : theme.controlFill, textColor: theme.text(tone)))
-
-            let logout = GlassButton(title: "Log Out", style: .text(theme.text(.red)), theme: theme, height: 24) { [weak self] in self?.logoutAccount(account.email) }
-            logout.isEnabled = !self.isSwitching
-            var rightEdge = width - 8 - logout.frame.width
-            row.place(logout, x: rightEdge, y: 9)
-            let rename = GlassButton(title: "Rename", style: .text(theme.text(.blue)), theme: theme, height: 24) { [weak self] in self?.editAccountLabel(account.email) }
-            rightEdge -= rename.frame.width + 2
-            row.place(rename, x: rightEdge, y: 9)
-
-            let dotSpace: CGFloat = account.isActive ? 14 : 0
-            let email = makeLabel(account.email, size: 12.5, weight: .medium, color: theme.primaryText)
-            let emailWidth = min(email.frame.width, rightEdge - 8 - 44 - dotSpace)
-            email.toolTip = account.email
-            row.place(email, x: 44, y: (42 - email.frame.height) / 2, width: emailWidth)
-            if account.isActive {
-                let dot = DotView(frame: NSRect(x: 44 + emailWidth + 7, y: 18, width: 7, height: 7), color: theme.color(.green))
-                dot.toolTip = "Active account"
-                row.addSubview(dot)
-            }
-        }
-    }
-
-    private func settingsClaudeRow(_ account: ClaudeAccountSummary, theme: PanelTheme) -> SettingsRow {
-        SettingsRow(height: 42) { [weak self] row, width in
-            guard let self else { return }
-            let tone: PanelTheme.Tone = account.needsLogin ? .red : account.isActive ? .green : .neutral
-            row.addSubview(MonogramView(frame: NSRect(x: 12, y: 9, width: 24, height: 24), text: String(account.title.prefix(1)).uppercased(), fill: tone == .neutral ? theme.controlFill : theme.tint(tone), textColor: theme.text(tone)))
-            var rightEdge = width - 8
-            if account.needsLogin {
-                let signIn = GlassButton(title: "Sign In", style: .text(theme.text(.blue)), theme: theme, height: 24) { [weak self] in self?.claude.signIn(account.email) }
-                rightEdge -= signIn.frame.width
-                row.place(signIn, x: rightEdge, y: 9)
-            }
-            if !account.isActive {
-                let remove = GlassButton(title: "Remove", style: .text(theme.text(.red)), theme: theme, height: 24) { [weak self] in self?.claude.remove(account.id) }
-                rightEdge -= remove.frame.width + 2
-                row.place(remove, x: rightEdge, y: 9)
-            }
-            let title = makeLabel(account.title, size: 12.5, weight: .medium, color: theme.primaryText)
-            let titleWidth = min(title.frame.width, (rightEdge - 52) * 0.45)
-            row.place(title, x: 44, y: (42 - title.frame.height) / 2, width: titleWidth)
-            let email = makeLabel(account.email, size: 11, color: theme.secondaryText)
-            email.toolTip = "\(account.email) · \(account.plan)"
-            row.place(email, x: 44 + titleWidth + 6, y: (42 - email.frame.height) / 2 + 1, width: max(0, rightEdge - 8 - (44 + titleWidth + 6) - (account.isActive ? 14 : 0)))
-            if account.isActive {
-                let dot = DotView(frame: NSRect(x: min(email.frame.maxX + 7, rightEdge - 14), y: 18, width: 7, height: 7), color: theme.color(.green))
-                dot.toolTip = "Active account"
-                row.addSubview(dot)
-            }
-        }
-    }
-
-    private func navRow(_ title: String, value: String?, symbol: String? = nil, tint: PanelTheme.Tone = .neutral, tag: String? = nil, action: SettingsPanelAction, theme: PanelTheme) -> SettingsRow {
-        SettingsRow(height: 40) { [weak self] row, width in
-            let tile = TileView(frame: row.bounds, fill: .clear, cornerRadius: 0, hoverFill: theme.controlFill.withAlphaComponent(0.5), accessibilityLabel: title) {
-                self?.performSettingsAction(action)
-            }
-            row.addSubview(tile)
-            var textX: CGFloat = 12
-            if let symbol {
-                tile.addSubview(MonogramView(frame: NSRect(x: 12, y: 8, width: 24, height: 24), text: "", fill: theme.tint(tint), textColor: theme.text(tint), symbol: symbol))
-                textX = 44
-            }
-            let chevron = SymbolIconView(frame: .zero, symbol: "chevron.right", color: theme.tertiaryText, pointSize: 10, weight: .bold)
-            tile.place(chevron, x: width - 12 - 8, y: 14, width: 8, height: 12)
-            var rightEdge = width - 12 - 8 - 8
-            if let tag {
-                let tagView = CapsuleTagView(text: tag, theme: theme, foreground: theme.text(.indigo), background: theme.tint(.indigo))
-                rightEdge -= tagView.frame.width
-                tile.place(tagView, x: rightEdge, y: 11)
-                rightEdge -= 8
-            }
-            let titleLabel = makeLabel(title, size: 12.5, weight: .medium, color: symbol != nil && tint == .blue ? theme.text(.blue) : theme.primaryText)
-            tile.place(titleLabel, x: textX, y: (40 - titleLabel.frame.height) / 2, width: min(titleLabel.frame.width + 2, rightEdge - textX))
-            if let value {
-                let valueLabel = makeLabel(value, size: 11, color: theme.secondaryText, alignment: .right, monospacedDigits: true)
-                let valueX = textX + titleLabel.frame.width + 12
-                tile.place(valueLabel, x: valueX, y: (40 - valueLabel.frame.height) / 2, width: max(0, rightEdge - valueX))
-            }
-        }
-    }
-
-    private func updatesRow(theme: PanelTheme) -> SettingsRow {
-        SettingsRow(height: 40) { [weak self] row, width in
-            guard let self else { return }
-            let check = GlassButton(title: "Check", style: .popup, theme: theme, height: 22, fontSize: 11.5) { [weak self] in self?.checkUpdates() }
-            check.image = nil
-            check.setFrameSize(NSSize(width: check.frame.width - 12, height: 22))
-            let rightEdge = width - 12 - check.frame.width
-            row.place(check, x: rightEdge, y: 9)
-            let title = makeLabel("Updates", size: 12.5, weight: .medium, color: theme.primaryText)
-            row.place(title, x: 12, y: (40 - title.frame.height) / 2, width: 100)
-            let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
-            let update = self.healthStatuses.first { $0.title == "Update" }?.value ?? ""
-            let status: String?
-            switch update {
-            case "Current": status = "up to date"
-            case "Checking": status = "checking…"
-            case "", "Check", "Error", "Unknown": status = nil
-            default: status = "\(update) available"
-            }
-            let value = makeLabel(status.map { "\(version) · \($0)" } ?? version, size: 11, color: theme.secondaryText, alignment: .right, monospacedDigits: true)
-            row.place(value, x: 12 + title.frame.width + 12, y: (40 - value.frame.height) / 2, width: rightEdge - 10 - (12 + title.frame.width + 12))
-        }
-    }
-
-    private func healthRow(theme: PanelTheme) -> SettingsRow {
-        let statuses = Array(healthStatuses.prefix(8))
-        let columns = 2
-        let rows = Int(ceil(Double(statuses.count) / Double(columns)))
-        return SettingsRow(height: CGFloat(rows) * 22 + 18) { row, width in
-            let columnWidth = (width - 24 - 24) / CGFloat(columns)
-            for (index, status) in statuses.enumerated() {
-                let x = 12 + CGFloat(index % columns) * (columnWidth + 24)
-                let y = 10 + CGFloat(index / columns) * 22
-                row.addSubview(DotView(frame: NSRect(x: x, y: y + 5, width: 7, height: 7), color: status.color))
-                let title = makeLabel(status.title, size: 11, color: theme.secondaryText)
-                row.place(title, x: x + 12, y: y, width: 52)
-                let value = makeLabel(status.value, size: 11, weight: .semibold, color: theme.primaryText, alignment: .right)
-                value.toolTip = status.value
-                row.place(value, x: x + 12 + title.frame.width + 4, y: y, width: max(0, columnWidth - 12 - title.frame.width - 4))
-            }
-        }
-    }
-
-    private func autoSwitchPopupText() -> String {
-        switch autoSwitchMode {
-        case .off: return "Off"
-        case .ask: return "Ask at \(autoSwitchThreshold)%"
-        case .threshold: return "At \(autoSwitchThreshold)%"
-        case .zero: return "Ask at 0%"
-        }
-    }
-
-    private func autoResumeText() -> String {
-        switch autoResumeMode {
-        case .off: return "Off"
-        case .ask: return "Ask first"
-        case .idle5: return "Idle 5s"
-        case .idle10: return "Idle 10s"
-        case .always: return "Always"
-        }
-    }
-
-    // MARK: - Route B
-
-    private func buildRouteBBody(into body: NSView, theme: PanelTheme) -> CGFloat {
-        var y: CGFloat = 0
-        let banner = TileView(frame: NSRect(x: inset, y: y, width: contentWidth, height: 64), fill: theme.tint(.indigo), border: theme.color(.indigo).withAlphaComponent(0.35))
-        banner.place(makeLabel("Secondary lane only", size: 12.5, weight: .semibold, color: theme.text(.indigo)), x: 12, y: 10, width: contentWidth - 24)
-        banner.place(makeLabel("No requests or keys in this preview. Native Codex stays the", size: 11, color: theme.secondaryText), x: 12, y: 28, width: contentWidth - 24)
-        banner.place(makeLabel("default for sends, uploads, accounts and live operations.", size: 11, color: theme.secondaryText), x: 12, y: 43, width: contentWidth - 24)
-        body.addSubview(banner)
-        y = banner.frame.maxY + 12
-
-        for profile in routeBProfiles.prefix(2) {
-            let isSelected = profile.id == selectedRouteBProfileID
-            let capabilityHeight = routeBCapabilityRowsHeight(profile.capabilities, width: contentWidth - 24)
-            let tile = TileView(
-                frame: NSRect(x: inset, y: y, width: contentWidth, height: 78 + capabilityHeight + 12),
-                fill: theme.tileFill,
-                border: isSelected ? theme.color(.green).withAlphaComponent(0.5) : theme.tileBorder,
-                borderWidth: isSelected ? 1 : 0.5
-            )
-            let button = GlassButton(title: isSelected ? "Selected" : "Select", style: isSelected ? .secondary : .primary, theme: theme) { [weak self] in
-                self?.selectRouteBProfile(profile.id)
-            }
-            button.isEnabled = !isSelected
-            let buttonX = contentWidth - 12 - button.frame.width
-            tile.place(button, x: buttonX, y: 12)
-            tile.place(makeLabel(profile.name, size: 13, weight: .semibold, color: theme.primaryText), x: 12, y: 12, width: buttonX - 20)
-            tile.place(makeLabel("\(profile.provider) · \(profile.model)", size: 11, color: theme.secondaryText), x: 12, y: 30, width: buttonX - 20)
-            tile.place(makeLabel(profile.summary, size: 11, color: theme.secondaryText), x: 12, y: 50, width: contentWidth - 24)
-
-            var x: CGFloat = 12
-            var rowY: CGFloat = 76
-            for capability in profile.capabilities {
-                let (tone, symbol): (PanelTheme.Tone, String) = {
-                    switch capability.state {
-                    case .ready: return (.green, "✓")
-                    case .testRequired: return (.orange, "!")
-                    case .blocked: return (.red, "×")
-                    }
-                }()
-                let tag = CapsuleTagView(text: "\(symbol) \(capability.label)", theme: theme, foreground: theme.text(tone), background: theme.tint(tone), height: 20, fontSize: 10.5)
-                if x + tag.frame.width > contentWidth - 12 {
-                    x = 12
-                    rowY += 26
-                }
-                tile.place(tag, x: x, y: rowY)
-                x += tag.frame.width + 6
-            }
-            body.addSubview(tile)
-            y = tile.frame.maxY + 10
-        }
-        return y + 2
-    }
-
-    private func routeBCapabilityRowsHeight(_ capabilities: [RouteBCapability], width: CGFloat) -> CGFloat {
-        let font = NSFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .semibold)
-        var x: CGFloat = 0
-        var rows: CGFloat = capabilities.isEmpty ? 0 : 1
-        for capability in capabilities {
-            let tagWidth = textWidth("✓ \(capability.label)", font: font) + 14
-            if x + tagWidth > width {
-                rows += 1
-                x = 0
-            }
-            x += tagWidth + 6
-        }
-        return rows * 26
-    }
-
-    // MARK: - Shared helpers
-
-    private func orderedAccounts() -> [CodexAccount] {
-        accounts.sorted { left, right in
-            let leftPriority = sortPriority(for: left)
-            let rightPriority = sortPriority(for: right)
-            if leftPriority != rightPriority { return leftPriority < rightPriority }
-            return labelForAccount(left).localizedCaseInsensitiveCompare(labelForAccount(right)) == .orderedAscending
-        }
-    }
-
-    private func sortPriority(for account: CodexAccount) -> Int {
-        switch labelForAccount(account) {
-        case "L": return 0
-        case "A": return 1
-        default: return 10
-        }
-    }
-
-    private func accountNeedsLogin(_ account: CodexAccount) -> Bool {
-        account.fiveHourUsage == "Login expired" || account.weeklyUsage == "Login expired"
-    }
-
-    private func percentText(_ percent: Int?) -> String {
-        guard let percent else { return "--" }
-        return "\(max(0, min(100, percent)))%"
-    }
-
-    private func switchPreviewText(for account: CodexAccount) -> String {
-        "Switch to \(labelForAccount(account)) · 5-hour \(percentText(account.fiveHourUsedPercent)) · weekly \(percentText(account.weeklyUsedPercent))"
-    }
-
-    private func fiveHourResetText(from usage: String) -> String {
-        guard let inner = parenthesizedValue(from: usage) else { return "--:--" }
-        return Self.firstClockText(in: inner) ?? inner
-    }
-
-    private func weeklyResetText(from usage: String) -> String {
-        guard let inner = parenthesizedValue(from: usage) else { return "--" }
-        let time = Self.firstClockText(in: inner)
-        let day = Self.firstWeekdayText(in: inner) ?? Self.inferredWeekdayText(from: inner)
-        switch (time, day) {
-        case let (time?, day?): return "\(day) \(time)"
-        case let (time?, nil): return time
-        case let (nil, day?): return day
-        default: return inner
-        }
-    }
-
-    private func parenthesizedValue(from usage: String) -> String? {
-        guard let open = usage.firstIndex(of: "("), let close = usage.firstIndex(of: ")"), open < close else { return nil }
-        return String(usage[usage.index(after: open)..<close])
-    }
-
-    private static let clockRegex = try? NSRegularExpression(pattern: #"(?<!\d)(\d{1,2}):(\d{2})(?!\d)"#)
-
-    private static func firstClockText(in text: String) -> String? {
-        guard let regex = clockRegex,
-              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-              let hourRange = Range(match.range(at: 1), in: text),
-              let minuteRange = Range(match.range(at: 2), in: text),
-              let hour = Int(text[hourRange]) else {
-            return nil
-        }
-        return String(format: "%02d:%@", hour, String(text[minuteRange]))
-    }
-
-    private static let weekdayNames: [String: String] = [
-        "monday": "Mon", "mon": "Mon",
-        "tuesday": "Tue", "tue": "Tue", "tues": "Tue",
-        "wednesday": "Wed", "wed": "Wed",
-        "thursday": "Thu", "thu": "Thu", "thur": "Thu", "thurs": "Thu",
-        "friday": "Fri", "fri": "Fri",
-        "saturday": "Sat", "sat": "Sat",
-        "sunday": "Sun", "sun": "Sun"
-    ]
-
-    private static func firstWeekdayText(in text: String) -> String? {
-        for token in text.split(whereSeparator: { !$0.isLetter }) {
-            if let day = weekdayNames[token.lowercased()] { return day }
-        }
-        return nil
-    }
-
-    private static let inferenceFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
-        return formatter
-    }()
-
-    private static let inferenceFormats = [
-        "HH:mm MMM d yyyy", "HH:mm MMMM d yyyy", "HH:mm d MMM yyyy", "HH:mm d MMMM yyyy",
-        "MMM d HH:mm yyyy", "MMMM d HH:mm yyyy", "d MMM HH:mm yyyy", "d MMMM HH:mm yyyy",
-        "yyyy HH:mm MMM d", "yyyy HH:mm MMMM d", "yyyy HH:mm d MMM", "yyyy HH:mm d MMMM",
-        "yyyy MMM d HH:mm", "yyyy MMMM d HH:mm", "yyyy d MMM HH:mm", "yyyy d MMMM HH:mm"
-    ]
-
-    private static func inferredWeekdayText(from text: String) -> String? {
-        let cleaned = text
-            .replacingOccurrences(of: ",", with: " ")
-            .replacingOccurrences(of: " on ", with: " ")
-            .replacingOccurrences(of: "  ", with: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let year = Calendar.current.component(.year, from: Date())
-        let formatter = inferenceFormatter
-        for candidate in [cleaned, "\(cleaned) \(year)", "\(year) \(cleaned)"] {
-            for format in inferenceFormats {
-                formatter.dateFormat = format
-                if let date = formatter.date(from: candidate) {
-                    let symbols = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-                    return symbols[Calendar.current.component(.weekday, from: date) - 1]
-                }
-            }
-        }
-        return nil
-    }
-}
-
-// MARK: - Cursor
-
-extension AccountSwitcherPanelView {
-    fileprivate func buildCursorCard(into body: NSView, y: CGFloat, theme: PanelTheme) -> CGFloat {
-        let snapshot = cursor.snapshot
-        let reset = MenuBarGlyph.relativeReset(snapshot?.resetAt) ?? ""
-        let lanes: [(String, Int?)] = [("Plan", snapshot?.planUsed), ("Auto", snapshot?.autoUsed), ("API", snapshot?.apiUsed)]
-        let windows = lanes.compactMap { lane -> (String, Int?, String)? in
-            lane.1.map { (lane.0, 100 - $0, reset) }
-        }
-        let plan = snapshot?.membership.map { $0.prefix(1).uppercased() + $0.dropFirst() } ?? "Cursor"
-        let card = usageCard(
-            UsageCard(
-                title: "Cursor \(plan)",
-                detail: cursor.error ?? "",
-                isActive: true,
-                needsLogin: false,
-                windows: windows,
-                tooltip: cursor.error,
-                switchAction: nil
-            ),
-            trailing: [],
-            divider: false,
-            theme: theme,
-            y: y
-        )
-        body.addSubview(card)
-        return card.frame.maxY + 12
-    }
-}
-
-// MARK: - Claude
-
-extension AccountSwitcherPanelView {
-    private func buildClaudeCards(into body: NSView, y startY: CGFloat, theme: PanelTheme) -> CGFloat {
-        var y = startY
-        guard !claude.accounts.isEmpty else {
-            let tile = TileView(frame: NSRect(x: inset, y: y, width: contentWidth, height: 112), fill: theme.tileFill, border: theme.tileBorder)
-            tile.addSubview(MonogramView(frame: NSRect(x: 12, y: 14, width: 32, height: 32), text: "", fill: theme.tint(.orange), textColor: theme.text(.orange), symbol: "sparkle"))
-            tile.place(makeLabel("No Claude accounts", size: 13, weight: .semibold, color: theme.primaryText), x: 52, y: 15, width: contentWidth - 64)
-            tile.place(makeLabel("Sign in once for each Claude account.", size: 11, color: theme.secondaryText), x: 52, y: 33, width: contentWidth - 64)
-            let add = GlassButton(title: "Sign In to Claude…", style: .primary, theme: theme) { [weak self] in
-                self?.claude.signIn(nil)
-            }
-            tile.place(add, x: 12, y: 68)
-            body.addSubview(tile)
-            return tile.frame.maxY + 12
-        }
-
-        let active = claude.active
-        let others = claude.accounts.filter { !$0.isActive }
-        for account in (active.map { [$0] } ?? []) + others {
-            var trailing: [GlassButton] = []
-            if account.needsLogin {
-                trailing = [GlassButton(title: "Sign In…", style: .secondary, theme: theme, height: 24, fontSize: 12) { [weak self] in
-                    self?.claude.signIn(account.email)
-                }]
-            }
-            let canSwitch = !account.isActive && !account.needsLogin && !claude.isSwitching
-            let card = usageCard(
-                UsageCard(
-                    title: account.title,
-                    detail: "\(account.planLabel) · \(account.email)",
-                    isActive: account.isActive,
-                    needsLogin: account.needsLogin,
-                    windows: (account.hasFiveHourLimit ? [
-                        ("5h", account.fiveHourRemaining, MenuBarGlyph.relativeReset(account.fiveHourResetAt) ?? "")
-                    ] : []) + [
-                        ("7d", account.weeklyRemaining, MenuBarGlyph.relativeReset(account.weeklyResetAt) ?? "")
-                    ],
-                    tooltip: ["\(account.title) · \(account.plan)", account.email, account.usageError].compactMap { $0 }.joined(separator: "\n"),
-                    switchAction: canSwitch ? { [weak self] in self?.claude.switchAccount(account.id) } : nil
-                ),
-                trailing: trailing,
-                divider: y > startY,
-                theme: theme,
-                y: y
-            )
-            body.addSubview(card)
-            y = card.frame.maxY
-        }
-        return y + 12
-    }
 }

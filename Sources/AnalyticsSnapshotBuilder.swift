@@ -72,20 +72,20 @@ struct AnalyticsSnapshotBuilder {
 
     // MARK: Build
 
-    func build(store: AnalyticsStore, sessions: [AnalyticsSessionRecord], period: AnalyticsPeriod) -> AnalyticsSnapshot {
+    func build(store: AnalyticsStore, period: AnalyticsPeriod) -> AnalyticsSnapshot {
         let today = day(of: now.timeIntervalSince1970)
         let span = range(period, today: today)
         let rows = foldedRows(store.buckets)
         var daily: [Int: (totals: AnalyticsTotals, models: [String: Int])] = [:]
         for row in rows {
             var entry = daily[row.day] ?? (AnalyticsTotals(), [:])
-            Self.add(row, to: &entry.totals)
+            entry.totals.add(row.bucket, costUSD: row.cost)
             entry.models[row.model] = (entry.models[row.model] ?? 0).saturatingAdd(row.bucket.counts.total)
             daily[row.day] = entry
         }
         let inPeriod = rows.filter { span.contains($0.day) }
         var totals = AnalyticsTotals()
-        inPeriod.forEach { Self.add($0, to: &totals) }
+        inPeriod.forEach { totals.add($0.bucket, costUSD: $0.cost) }
         let sum = { (days: ClosedRange<Int>) in days.saturatingSum { daily[$0]?.totals.total ?? 0 } }
         let last30 = (today - 29)...today
         let active30 = last30.filter { daily[$0] != nil }.count
@@ -109,34 +109,24 @@ struct AnalyticsSnapshotBuilder {
                 AnalyticsDay(day: date(ofDay: day), totals: daily[day]?.totals ?? AnalyticsTotals(), modelTokens: daily[day]?.models ?? [:])
             },
             projects: projects(store.projectBuckets, span: span),
-            efficiency: AnalyticsEfficiencySummary.summarize(sessions, from: span.lowerBound, to: span.upperBound, day: day(of:), pricing: pricing),
             scannedAt: Date(timeIntervalSince1970: store.lastScanAt ?? now.timeIntervalSince1970)
         )
     }
 
-    private static func add(_ row: Row, to totals: inout AnalyticsTotals) {
-        let c = row.bucket.counts
-        totals.input = totals.input.saturatingAdd(c.input)
-        totals.cached = totals.cached.saturatingAdd(c.cached)
-        totals.cacheCreation = totals.cacheCreation.saturatingAdd(c.cacheCreation)
-        totals.output = totals.output.saturatingAdd(c.output)
-        totals.reasoning = totals.reasoning.saturatingAdd(c.reasoning)
-        totals.total = totals.total.saturatingAdd(c.total)
-        totals.conversations = totals.conversations.saturatingAdd(row.bucket.conversations)
-        totals.costUSD += row.cost
-    }
-
     /// §0.2: within one (source, half-hour), "unknown" folds into the dominant real model.
     private func foldedRows(_ buckets: [AnalyticsBucketKey: AnalyticsBucket]) -> [Row] {
-        var groups: [String: [(String, AnalyticsBucket)]] = [:]
+        struct Group: Hashable {
+            let source: AnalyticsSource
+            let halfHour: Int64
+        }
+        var groups: [Group: [(String, AnalyticsBucket)]] = [:]
         for (key, bucket) in buckets {
-            groups["\(key.source.rawValue)|\(key.halfHour)", default: []].append((key.model, bucket))
+            groups[Group(source: key.source, halfHour: key.halfHour), default: []].append((key.model, bucket))
         }
         var rows: [Row] = []
         var dayCache: [Int64: Int] = [:]
         for (key, members) in groups {
-            let parts = key.split(separator: "|")
-            guard let source = AnalyticsSource(rawValue: String(parts[0])), let halfHour = Int64(parts[1]) else { continue }
+            let source = key.source, halfHour = key.halfHour
             var models = Dictionary(members, uniquingKeysWith: { a, b in var m = a; m.add(b); return m })
             if let unknown = models["unknown"], models.count > 1 {
                 models["unknown"] = nil
@@ -149,7 +139,7 @@ struct AnalyticsSnapshotBuilder {
             dayCache[halfHour] = day
             for (model, bucket) in models {
                 let rates = pricing.rates(model: model, source: source)
-                let cost = pricing.cost(source: source, model: model, usage: AnalyticsUsageDetail(bucket: bucket))
+                let cost = pricing.cost(source: source, model: model, bucket: bucket)
                 rows.append(Row(source: source, model: model, halfHour: halfHour, bucket: bucket, day: day, cost: cost,
                                 unpriced: rates == nil && bucket.counts.total > 0))
             }
@@ -193,7 +183,7 @@ struct AnalyticsSnapshotBuilder {
 
     /// §4.2: 26 week columns starting on Sunday; levels are quantiles over non-zero days.
     private func heatmap(_ daily: [Int: (totals: AnalyticsTotals, models: [String: Int])], today: Int) -> [AnalyticsHeatCell] {
-        let start = today - Self.weekday(today) - 7 * 25
+        let start = today - Self.weekday(today) - 7 * (AnalyticsHeatmap.weeks - 1)
         let values = (start...today).map { max(0, daily[$0]?.totals.total ?? 0) }
         let sorted = values.filter { $0 > 0 }.sorted()
         func quantile(_ p: Double) -> Double {
@@ -270,19 +260,26 @@ struct AnalyticsSnapshotBuilder {
             dayCache[key.halfHour] = day
             guard span.contains(day) else { continue }
             var entry = totals[key.project] ?? AnalyticsTotals()
-            let c = bucket.counts
-            entry.input = entry.input.saturatingAdd(c.input)
-            entry.cached = entry.cached.saturatingAdd(c.cached)
-            entry.cacheCreation = entry.cacheCreation.saturatingAdd(c.cacheCreation)
-            entry.output = entry.output.saturatingAdd(c.output)
-            entry.reasoning = entry.reasoning.saturatingAdd(c.reasoning)
-            entry.total = entry.total.saturatingAdd(c.total)
-            entry.conversations = entry.conversations.saturatingAdd(bucket.conversations)
+            entry.add(bucket)
             totals[key.project] = entry
         }
         return totals
             .sorted { $0.value.total != $1.value.total ? $0.value.total > $1.value.total : $0.key < $1.key }
             .prefix(10)
             .map { AnalyticsProject(name: $0.key, totals: $0.value) }
+    }
+}
+
+private extension AnalyticsTotals {
+    mutating func add(_ bucket: AnalyticsBucket, costUSD: Double = 0) {
+        let counts = bucket.counts
+        input = input.saturatingAdd(counts.input)
+        cached = cached.saturatingAdd(counts.cached)
+        cacheCreation = cacheCreation.saturatingAdd(counts.cacheCreation)
+        output = output.saturatingAdd(counts.output)
+        reasoning = reasoning.saturatingAdd(counts.reasoning)
+        total = total.saturatingAdd(counts.total)
+        conversations = conversations.saturatingAdd(bucket.conversations)
+        self.costUSD += costUSD
     }
 }

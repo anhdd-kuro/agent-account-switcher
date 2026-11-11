@@ -1,6 +1,5 @@
 import AppKit
 
-/// "Limit reset" celebration: a short toast under the menu bar and a confetti burst, both click-through.
 enum Celebration {
     static let toastDefaultsKey = "toastOnReset"
     static let confettiDefaultsKey = "confettiOnReset"
@@ -63,7 +62,6 @@ enum Celebration {
         return image.cgImage(forProposedRect: nil, context: nil, hints: nil)
     }
 
-    /// A few soft firework bursts under the status item, staggered over about a second.
     private static func fireworks(on screen: NSScreen, from point: NSPoint) -> NSWindow {
         let window = overlay(screen.frame)
         let view = NSView(frame: NSRect(origin: .zero, size: screen.frame.size))

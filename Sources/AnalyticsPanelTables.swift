@@ -17,7 +17,6 @@ struct AnalyticsTableRow {
     var toolTip: String?
 }
 
-/// A compact, drawn table: a header, monospaced digits, a first text column and right-aligned numbers.
 final class AnalyticsTableView: NSView, NSViewToolTipOwner {
     private let columns: [AnalyticsTableColumn]
     private let rows: [AnalyticsTableRow]

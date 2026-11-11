@@ -1,17 +1,7 @@
 import AppKit
 import Foundation
 
-// launchd can expose the caller's inherited environment to agents. The monitor
-// needs no credentials, so discard secret-shaped values immediately.
-for key in ProcessInfo.processInfo.environment.keys {
-    let upper = key.uppercased()
-    if upper.contains("TOKEN") || upper.contains("SECRET") || upper.contains("PASSWORD") || upper.contains("API_KEY") {
-        unsetenv(key)
-    }
-}
-
 private let switcherBundleID = "com.mohamedfuad.codexaccountswitcher"
-private let targetBundleIDs: Set<String> = ["com.openai.codex", "com.openai.chat"]
 private let switcherURL = URL(fileURLWithPath: "/Applications/AI Account Switcher.app")
 private let grace: TimeInterval = 5
 
@@ -32,7 +22,7 @@ final class LifecycleMonitor {
 
     private func reconcile() {
         let running = workspace.runningApplications
-        let targetRunning = running.contains { targetBundleIDs.contains($0.bundleIdentifier ?? "") }
+        let targetRunning = running.contains { DesktopApplication.matches(bundleID: $0.bundleIdentifier, name: $0.localizedName) }
         let switcher = running.first { $0.bundleIdentifier == switcherBundleID }
 
         if targetRunning {
@@ -48,7 +38,7 @@ final class LifecycleMonitor {
         let item = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.quitWorkItem = nil
-            let stillRunning = self.workspace.runningApplications.contains { targetBundleIDs.contains($0.bundleIdentifier ?? "") }
+            let stillRunning = self.workspace.runningApplications.contains { DesktopApplication.matches(bundleID: $0.bundleIdentifier, name: $0.localizedName) }
             if !stillRunning {
                 self.workspace.runningApplications.first { $0.bundleIdentifier == switcherBundleID }?.terminate()
             }
@@ -58,5 +48,19 @@ final class LifecycleMonitor {
     }
 }
 
-let monitor = LifecycleMonitor()
-RunLoop.main.run()
+@main
+struct LifecycleMonitorMain {
+    static func main() {
+        // launchd can expose the caller's inherited environment to agents. The monitor
+        // needs no credentials, so discard secret-shaped values immediately.
+        for key in ProcessInfo.processInfo.environment.keys {
+            let upper = key.uppercased()
+            if upper.contains("TOKEN") || upper.contains("SECRET") || upper.contains("PASSWORD") || upper.contains("API_KEY") {
+                unsetenv(key)
+            }
+        }
+
+        let monitor = LifecycleMonitor()
+        withExtendedLifetime(monitor) { RunLoop.main.run() }
+    }
+}

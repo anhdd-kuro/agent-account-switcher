@@ -1,9 +1,7 @@
 import AppKit
 import Foundation
 
-/// Number, money and date formatting for the Analytics tab (tmp/analytics-spec.md §4.7, §5.3, §6).
 enum AnalyticsPanelFormat {
-    /// K, M, B, T with one decimal, rolling over at 1000.
     static func compact(_ value: Int) -> String {
         let magnitude = Double(abs(value))
         let sign = value < 0 ? "-" : ""
@@ -22,21 +20,14 @@ enum AnalyticsPanelFormat {
         groupedFormatter.string(from: NSNumber(value: value)) ?? "\(value)"
     }
 
-    /// `x < 1` → 4 decimals, otherwise 2 (§5.3).
     static func usd(_ value: Double) -> String {
         let formatter = value < 1 ? smallUSD : largeUSD
         return formatter.string(from: NSNumber(value: value)) ?? String(format: "$%.2f", value)
     }
 
-    /// Headline estimate: "≈ $X", "≥ $X" when some model had no price, "Unpriced" when nothing was priced (§6).
     static func estimatedCost(_ value: Double, isPartial: Bool) -> String {
         if isPartial && value <= 0 { return "Unpriced" }
         return (isPartial ? "≥ " : "≈ ") + usd(value)
-    }
-
-    static func percent(_ fraction: Double?) -> String {
-        guard let fraction, fraction.isFinite else { return "—" }
-        return "\(Int((fraction * 100).rounded()))%"
     }
 
     static func share(_ value: Double) -> String {
@@ -61,7 +52,6 @@ enum AnalyticsPanelFormat {
     static func hour(_ date: Date) -> String { hourMinute.string(from: date) }
     static func weekdayDay(_ date: Date) -> String { weekdayShort.string(from: date) }
 
-    /// "Oct 1 — Oct 31", with years only when the range leaves the current year.
     static func range(from: Date, to: Date) -> String {
         let calendar = Calendar.current
         let thisYear = calendar.component(.year, from: Date())
@@ -106,7 +96,6 @@ enum AnalyticsPanelFormat {
     private static let largeUSD = currency(decimals: 2)
 }
 
-/// Colours for the Analytics charts (§4.2, §4.5).
 enum AnalyticsPanelPalette {
     static func rgb(_ hex: UInt32, _ alpha: CGFloat = 1) -> NSColor {
         NSColor(
@@ -122,29 +111,30 @@ enum AnalyticsPanelPalette {
         0x84CC16, 0xA855F7, 0xEF4444, 0xEAB308, 0x6366F1, 0x22C55E
     ]
 
-    /// Matched by substring; anything else hashes stably into a 12-colour list.
-    static func modelColor(_ model: String) -> NSColor {
+    private static let families: [(terms: [String], name: String, color: UInt32)] = [
+        (["codex"], "Codex", 0x3B82F6),
+        (["gpt", "openai"], "GPT", 0x10B981),
+        (["claude", "anthropic"], "Claude", 0xD97757),
+        (["gemini", "google"], "Gemini", 0x2196F3)
+    ]
+
+    private static func family(_ model: String) -> (name: String, color: UInt32)? {
         let name = model.lowercased()
-        if name.contains("codex") { return rgb(0x3B82F6) }
-        if name.contains("gpt") || name.contains("openai") { return rgb(0x10B981) }
-        if name.contains("claude") || name.contains("anthropic") { return rgb(0xD97757) }
-        if name.contains("gemini") || name.contains("google") { return rgb(0x2196F3) }
+        guard let family = families.first(where: { $0.terms.contains(where: name.contains) }) else { return nil }
+        return (family.name, family.color)
+    }
+
+    static func modelColor(_ model: String) -> NSColor {
+        if let family = family(model) { return rgb(family.color) }
         var hash: UInt32 = 5381
-        for byte in name.utf8 { hash = (hash &* 33) ^ UInt32(byte) }
+        for byte in model.lowercased().utf8 { hash = (hash &* 33) ^ UInt32(byte) }
         return rgb(fallback[Int(hash % UInt32(fallback.count))])
     }
 
-    /// Legend label: the colour family for matched names, otherwise the model itself.
     static func modelFamily(_ model: String) -> String {
-        let name = model.lowercased()
-        if name.contains("codex") { return "Codex" }
-        if name.contains("gpt") || name.contains("openai") { return "GPT" }
-        if name.contains("claude") || name.contains("anthropic") { return "Claude" }
-        if name.contains("gemini") || name.contains("google") { return "Gemini" }
-        return model
+        family(model)?.name ?? model
     }
 
-    /// Five heatmap levels; level 0 sits on the tile as an empty well.
     static func heatLevels(_ theme: PanelTheme) -> [NSColor] {
         theme.isDark
             ? [theme.trackFill, rgb(0x065F46), rgb(0x059669), rgb(0x10B981), rgb(0x34D399)]

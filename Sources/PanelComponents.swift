@@ -46,7 +46,6 @@ func makeLabel(
 }
 
 extension NSView {
-    /// Adds a label at a position, optionally constraining its width, and returns its frame.
     @discardableResult
     func place(_ view: NSView, x: CGFloat, y: CGFloat, width: CGFloat? = nil, height: CGFloat? = nil) -> NSRect {
         var frame = view.frame
@@ -60,8 +59,6 @@ extension NSView {
 }
 
 // MARK: - Panel surface
-
-/// The panel's flat, opaque Vitesse surface with a hairline edge.
 final class GlassPanelBackground: NSView {
     let contentView: FlippedContainerView
 
@@ -90,39 +87,7 @@ final class GlassPanelBackground: NSView {
     }
 }
 
-/// Darkened outer edge plus a bright top highlight, for systems without NSGlassEffectView.
-final class PanelEdgeView: NSView {
-    private let theme: PanelTheme
-    private let cornerRadius: CGFloat
-
-    init(frame: NSRect, theme: PanelTheme, cornerRadius: CGFloat) {
-        self.theme = theme
-        self.cornerRadius = cornerRadius
-        super.init(frame: frame)
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let outer = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.25, dy: 0.25), xRadius: cornerRadius, yRadius: cornerRadius)
-        outer.lineWidth = 0.5
-        theme.panelEdge.setStroke()
-        outer.stroke()
-
-        let inner = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.75, dy: 0.75), xRadius: cornerRadius - 0.5, yRadius: cornerRadius - 0.5)
-        inner.lineWidth = 0.5
-        theme.panelHighlight.withAlphaComponent(theme.isDark ? 0.10 : 0.6).setStroke()
-        inner.stroke()
-    }
-}
-
 // MARK: - Tiles
-
-/// A rounded glass tile. With an action it behaves like a large button (hover, click, VoiceOver press).
 final class TileView: NSView {
     private var fillColor: NSColor
     private let hoverFillColor: NSColor?
@@ -650,8 +615,6 @@ final class DotView: NSView {
         NSBezierPath(ovalIn: bounds).fill()
     }
 }
-
-/// One usage window on a single line: label, bar, percent left and time to reset.
 final class UsageBarRowView: NSView {
     private let label: String
     private let percent: Int?
@@ -684,12 +647,23 @@ final class UsageBarRowView: NSView {
         let resetAttributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: theme.tertiaryText]
         let textY = (bounds.height - font.boundingRectForFont.height) / 2 + 1
         let labelWidth: CGFloat = 30
-        let resetWidth: CGFloat = 50
+        let resetSize = (reset as NSString).size(withAttributes: resetAttributes)
+        let resetWidth = min(bounds.width / 3, max(50, ceil(resetSize.width) + 8))
         let valueWidth: CGFloat = 40
 
         (label as NSString).draw(at: NSPoint(x: 0, y: textY), withAttributes: labelAttributes)
-        let resetSize = (reset as NSString).size(withAttributes: resetAttributes)
-        (reset as NSString).draw(at: NSPoint(x: bounds.width - resetSize.width, y: textY), withAttributes: resetAttributes)
+        if resetSize.width <= resetWidth - 8 {
+            (reset as NSString).draw(at: NSPoint(x: bounds.width - resetSize.width, y: textY), withAttributes: resetAttributes)
+        } else {
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.alignment = .right
+            paragraph.lineBreakMode = .byTruncatingTail
+            var truncatedAttributes = resetAttributes
+            truncatedAttributes[.paragraphStyle] = paragraph
+            (reset as NSString).draw(in: NSRect(x: bounds.width - resetWidth + 8, y: textY,
+                                               width: resetWidth - 8, height: font.boundingRectForFont.height),
+                                    withAttributes: truncatedAttributes)
+        }
         let value = percent.map { "\($0)%" } ?? "--"
         let valueSize = (value as NSString).size(withAttributes: valueAttributes)
         (value as NSString).draw(at: NSPoint(x: bounds.width - resetWidth - valueSize.width, y: textY), withAttributes: valueAttributes)
@@ -705,8 +679,6 @@ final class UsageBarRowView: NSView {
         }
     }
 }
-
-/// A row of proportional coloured segments separated by small gaps.
 final class StackedBarView: NSView {
     private let segments: [(weight: CGFloat, color: NSColor)]
 
@@ -738,8 +710,6 @@ final class StackedBarView: NSView {
 // MARK: - Menu bar glyphs
 
 enum MenuBarGlyph {
-    /// A bundled SVG logo filled with the menu bar's label colour at draw time,
-    /// so it stays white on dark menu bars and black on light ones.
     static func logo(_ name: String, size: CGFloat, color: NSColor = .labelColor) -> NSImage? {
         guard let url = Bundle.main.url(forResource: name, withExtension: "svg"),
               let source = NSImage(contentsOf: url) else { return nil }
@@ -753,15 +723,13 @@ enum MenuBarGlyph {
 
     static let claudeOrange = NSColor(srgbRed: 0xD9 / 255.0, green: 0x77 / 255.0, blue: 0x57 / 255.0, alpha: 1)
 
-    struct UsagePart {
+    struct UsagePart: Equatable {
         let logo: String
         let text: String
         let isLow: Bool
         var reset: String? = nil
         var lines: [[String]]? = nil
     }
-
-    /// Time until `date`: `45m`, `4h`, `3d 4h`.
     static func relativeReset(_ date: Date?) -> String? {
         guard let date else { return nil }
         let seconds = max(0, date.timeIntervalSinceNow)
@@ -771,9 +739,6 @@ enum MenuBarGlyph {
         let hours = Int(seconds.truncatingRemainder(dividingBy: 86_400) / 3600)
         return hours > 0 ? "\(days)d \(hours)h" : "\(days)d"
     }
-
-    /// Rows of label, value and optional reset countdown, stacked to fit the menu bar height with each column aligned:
-    /// `5h  81% · 2h` over `7d  66% · 3d 4h`.
     static func stackedImage(_ rows: [[String]], fontSize: CGFloat, color: NSColor, dimColor: NSColor) -> NSImage {
         let font = NSFont.monospacedDigitSystemFont(ofSize: max(8, fontSize - 3.5), weight: .semibold)
         let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
@@ -799,8 +764,6 @@ enum MenuBarGlyph {
             return true
         }
     }
-
-    /// `[logo] 100% · 4h  |  [logo] 95% · 3d`, shared by the status item and its preview.
     static func usageTitle(_ parts: [UsagePart], fontSize: CGFloat, compact: Bool, textColor: NSColor = .labelColor, lowColor: NSColor, separatorColor: NSColor = .secondaryLabelColor) -> NSAttributedString {
         let font = NSFont.monospacedDigitSystemFont(ofSize: fontSize, weight: .semibold)
         let title = NSMutableAttributedString()
@@ -832,9 +795,6 @@ enum MenuBarGlyph {
     }
 
     private static var spinnerCache: [String: NSImage] = [:]
-
-    /// A quarter arc rotated by `frame` steps — the switching / resetting spinner.
-    /// The 12 frames are drawn once per colour and size, then reused.
     static func spinner(frame: Int, color: NSColor, diameter: CGFloat = 13, lineWidth: CGFloat = 2.2) -> NSImage {
         let step = frame % 12
         let key = "\(step)|\(diameter)|\(lineWidth)|\(color.description)"
@@ -889,54 +849,6 @@ extension NSImage {
 }
 
 // MARK: - Shared helpers
-
-extension DateFormatter {
-    static let diagnosticStamp: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
-        return formatter
-    }()
-
-    static let resetCreditISO: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
-    }()
-
-    static let resetCreditDisplay: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEE d MMM, HH:mm"
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
-        return formatter
-    }()
-
-    static let resetCreditShortDate: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEE d MMM"
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
-        return formatter
-    }()
-
-    static let directFiveHourUsage: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm"
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
-        return formatter
-    }()
-
-    static let directWeeklyUsage: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEE HH:mm"
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
-        return formatter
-    }()
-}
 
 extension NSAlert {
     /// The account panel sits at status-bar level, above ordinary modal alerts.

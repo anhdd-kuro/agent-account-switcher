@@ -1,26 +1,6 @@
 import Foundation
 
-// Cursor plan usage (Plan / Auto / API), read with the login Cursor already keeps on disk.
 // Approach and endpoint follow TokenTracker (MIT): cursor.com/api/usage-summary with the WorkOS session cookie.
-
-struct CursorUsageSnapshot: Equatable {
-    let membership: String?
-    let planUsed: Int?
-    let autoUsed: Int?
-    let apiUsed: Int?
-    let resetAt: Date?
-}
-
-enum CursorMenuBarLane: String {
-    case off, auto, api, both
-}
-
-struct CursorUsageState: Equatable {
-    var isInstalled = false
-    var snapshot: CursorUsageSnapshot?
-    var error: String?
-    var updatedAt: Date?
-}
 
 enum CursorUsageError: LocalizedError {
     case notSignedIn
@@ -54,10 +34,9 @@ enum CursorUsageClient {
     /// Keychain item the Cursor CLI writes its session JWT to.
     static let keychainService = "cursor-access-token"
 
-    /// First unexpired session JWT: the CLI's Keychain item, then the IDE's database.
     /// Newer IDE builds store an opaque `cursor-…` token there, which cursor.com rejects.
     static func accessToken() -> String? {
-        [keychainToken(), databaseToken()].compactMap { $0 }.first(where: isUsableJWT)
+        [keychainToken(), databaseToken()].compactMap { $0 }.first(where: { isUsableJWT($0) })
     }
 
     static func keychainToken() -> String? {
@@ -67,27 +46,23 @@ enum CursorUsageClient {
         return token.isEmpty ? nil : token
     }
 
-    static func isUsableJWT(_ token: String) -> Bool {
-        guard let claims = jwtClaims(token) else { return false }
+    static func isUsableJWT(_ token: String, now: Date = Date()) -> Bool {
+        guard let claims = JWTClaims.decode(token) else { return false }
         guard let expiry = (claims["exp"] as? NSNumber)?.doubleValue else { return true }
-        return expiry > Date().timeIntervalSince1970 + 60
+        return expiry > now.timeIntervalSince1970 + 60
     }
 
-    /// The `cursorAuth/accessToken` value, read read-only through the system sqlite3.
     static func databaseToken() -> String? {
         guard FileManager.default.fileExists(atPath: stateDatabase.path) else { return nil }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
-        process.arguments = ["-readonly", stateDatabase.path, "SELECT value FROM ItemTable WHERE key = 'cursorAuth/accessToken';"]
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        do { try process.run() } catch { return nil }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0,
-              let token = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-              token.count >= 10 else { return nil }
+        let result = ProcessRunner.run(
+            "/usr/bin/sqlite3",
+            ["-readonly", stateDatabase.path, "SELECT value FROM ItemTable WHERE key = 'cursorAuth/accessToken';"],
+            environment: [:],
+            timeout: 5
+        )
+        guard result.status == 0 else { return nil }
+        let token = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard token.count >= 10 else { return nil }
         return token
     }
 
@@ -103,18 +78,9 @@ enum CursorUsageClient {
         return oauthSubject.firstMatch(in: subject, range: range) != nil ? subject : nil
     }
 
-    static func jwtClaims(_ jwt: String) -> [String: Any]? {
-        let parts = jwt.split(separator: ".", omittingEmptySubsequences: false)
-        guard parts.count == 3 else { return nil }
-        var payload = String(parts[1]).replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
-        payload += String(repeating: "=", count: (4 - payload.count % 4) % 4)
-        guard let data = Data(base64Encoded: payload) else { return nil }
-        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-    }
-
     /// The token's own subject, so the cookie never pairs one user's id with another's token.
     static func userID(jwt: String) -> String? {
-        if let subject = jwtClaims(jwt)?["sub"] as? String, let normalized = normalizedSubject(subject) {
+        if let subject = JWTClaims.decode(jwt)?["sub"] as? String, let normalized = normalizedSubject(subject) {
             return normalized
         }
         guard let data = try? Data(contentsOf: cliConfig),
@@ -163,14 +129,8 @@ enum CursorUsageClient {
            let fromTeam, total == nil || total == 0 {
             total = fromTeam
         }
-        let resetAt = (body["billingCycleEnd"] as? String).flatMap { Self.parseDate($0) }
+        let resetAt = (body["billingCycleEnd"] as? String).flatMap { ISO8601Timestamp.parse($0) }
         return CursorUsageSnapshot(membership: membership, planUsed: total, autoUsed: auto, apiUsed: api, resetAt: resetAt)
-    }
-
-    private static func parseDate(_ text: String) -> Date? {
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return fractional.date(from: text) ?? ISO8601DateFormatter().date(from: text)
     }
 
     /// Refuses redirects off cursor.com so the session cookie never leaves it.
@@ -181,7 +141,6 @@ enum CursorUsageClient {
         }
     }
 
-    /// GET with the Cursor session cookie; redirects stay on cursor.com.
     static func get(_ urlString: String, accept: String, timeout: TimeInterval = 30) throws -> Data {
         guard let cookie = sessionCookie() else { throw CursorUsageError.notSignedIn }
         var request = URLRequest(url: URL(string: urlString)!, timeoutInterval: timeout)

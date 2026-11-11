@@ -15,7 +15,6 @@ enum AnalyticsHash {
 enum AnalyticsFingerprint {
     static let span = 4096
 
-    /// FNV-1a over the first `span` bytes and the `span` bytes ending at `offset`.
     static func of(path: String, upTo offset: Int64) -> UInt64? {
         guard offset > 0, let handle = FileHandle(forReadingAtPath: path) else { return nil }
         defer { try? handle.close() }
@@ -40,24 +39,6 @@ extension UnsafeRawBufferPointer {
         return memmem(base, count, needle.utf8Start, needle.utf8CodeUnitCount) != nil
     }
 
-    func hasPrefix(_ needle: StaticString) -> Bool {
-        guard let base = baseAddress, count >= needle.utf8CodeUnitCount else { return false }
-        return memcmp(base, needle.utf8Start, needle.utf8CodeUnitCount) == 0
-    }
-
-    /// The string value of the first `"key":"…"` occurrence, without JSON-parsing the line.
-    func firstStringValue(after key: StaticString, within limit: Int = .max) -> String? {
-        guard let base = baseAddress else { return nil }
-        let span = Swift.min(count, limit)
-        guard let hit = memmem(base, span, key.utf8Start, key.utf8CodeUnitCount) else { return nil }
-        let start = hit.assumingMemoryBound(to: UInt8.self) + key.utf8CodeUnitCount
-        let end = base.assumingMemoryBound(to: UInt8.self) + count
-        var cursor = start
-        while cursor < end, cursor.pointee != UInt8(ascii: "\"") { cursor += 1 }
-        guard cursor < end else { return nil }
-        return String(decoding: UnsafeBufferPointer(start: start, count: cursor - start), as: UTF8.self)
-    }
-
     func jsonObject() -> [String: Any]? {
         guard let base = baseAddress, count > 1 else { return nil }
         let data = Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: base), count: count, deallocator: .none)
@@ -66,15 +47,11 @@ extension UnsafeRawBufferPointer {
 }
 
 enum AnalyticsLines {
-    /// Calls `body` for every newline-terminated line of `buffer`; returns the bytes consumed.
-    /// With `includeTail`, a final unterminated line is delivered too (immutable snapshots).
-    /// Largest token count accepted from one usage field.
     static let maxTokenCount = 1_000_000_000_000
 
     /// Longest record handed to a parser; anything longer is skipped and reported (no real log line is near this).
     static let maxRecordBytes = 64 << 20
 
-    /// Lines longer than `maxRecordBytes` are dropped and reported through `oversized`.
     @discardableResult
     static func forEach(in buffer: UnsafeRawBufferPointer, includeTail: Bool, oversized: () -> Void = {}, _ body: (AnalyticsLine) -> Void) -> Int {
         guard let base = buffer.baseAddress else { return 0 }
@@ -96,12 +73,6 @@ enum AnalyticsLines {
             start = end + 1
         }
         return start
-    }
-
-    /// Streams `path` from `offset` in fixed chunks and returns the offset after the last complete line.
-    static func stream(path: String, from offset: Int64, chunkSize: Int = 8 << 20, progress: (Int) -> Void,
-                       oversized: () -> Void = {}, _ body: (AnalyticsLine) -> Void) -> Int64 {
-        streamRecords(path: path, from: offset, discardingFrom: nil, chunkSize: chunkSize, progress: progress, oversized: oversized, body).offset
     }
 
     struct StreamResult {
@@ -167,7 +138,6 @@ enum AnalyticsLines {
 }
 
 extension Int {
-    /// Overflow-safe sum for token aggregates; clamps instead of trapping.
     func saturatingAdd(_ other: Int) -> Int {
         let (sum, overflow) = addingReportingOverflow(other)
         return overflow ? (other > 0 ? .max : .min) : sum
@@ -247,6 +217,31 @@ struct AnalyticsFileStat: Equatable {
         guard stat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else { return nil }
         let mtime = Double(info.st_mtimespec.tv_sec) + Double(info.st_mtimespec.tv_nsec) / 1e9
         return AnalyticsFileStat(inode: UInt64(info.st_ino), size: Int64(info.st_size), mtime: mtime)
+    }
+}
+
+// Keep cursor fields flat so existing version-2 state files still decode.
+protocol AnalyticsLogCursor {
+    var inode: UInt64 { get }
+    var size: Int64 { get set }
+    var mtime: Double { get set }
+    var offset: Int64 { get }
+    var fingerprint: UInt64? { get }
+    var discardingFrom: Int64? { get }
+}
+
+extension AnalyticsLogCursor {
+    var readPosition: Int64 { discardingFrom ?? offset }
+
+    mutating func resume(path: String, stat: AnalyticsFileStat) -> Bool {
+        guard inode == stat.inode, readPosition <= stat.size else { return false }
+        if offset > 0, stat.size != size || stat.mtime != mtime {
+            // Same-size writes may alter unsampled middle records; appends must retain the read prefix.
+            guard stat.size != size, AnalyticsFingerprint.of(path: path, upTo: offset) == fingerprint else { return false }
+        }
+        size = stat.size
+        mtime = stat.mtime
+        return true
     }
 }
 

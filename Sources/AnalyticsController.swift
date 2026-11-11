@@ -105,7 +105,7 @@ final class AnalyticsController: AnalyticsProviding {
 
     private func build(_ store: AnalyticsStore, period: AnalyticsPeriod) -> AnalyticsSnapshot {
         AnalyticsSnapshotBuilder(pricing: pricing, timeZone: .current, now: Date())
-            .build(store: store, sessions: AnalyticsScanner.sessionRecords(store), period: period)
+            .build(store: store, period: period)
     }
 
     // MARK: Main queue

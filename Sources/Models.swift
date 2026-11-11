@@ -1,44 +1,7 @@
 import AppKit
 import Foundation
 
-struct CodexAccount: Equatable {
-    let selector: String
-    let email: String
-    let plan: String
-    let fiveHourUsage: String
-    let weeklyUsage: String
-    let fiveHourUsedPercent: Int?
-    let weeklyUsedPercent: Int?
-    let lastActivity: String
-    let isActive: Bool
-    /// Raw `plan_type` from the usage endpoint, e.g. `self_serve_business_prolite`.
-    var planType: String? = nil
-
-    /// Pro plans and Business premium (prolite) seats only have a weekly limit; their 5-hour figure is a placeholder.
-    var hasFiveHourLimit: Bool { Self.hasFiveHourLimit(plan: plan, planType: planType) }
-
-    static func hasFiveHourLimit(plan: String, planType: String?) -> Bool {
-        !(planType ?? plan).lowercased().contains("pro")
-    }
-
-    var planLabel: String { Self.planLabel(plan: plan, planType: planType) }
-
-    /// Display name for the plan, e.g. "Pro", "Business · Premium" (`self_serve_business_prolite`).
-    static func planLabel(plan: String, planType: String?) -> String {
-        let known = [planType, plan].compactMap { $0?.lowercased() }.first { !$0.isEmpty && $0 != "unknown" }
-        guard let raw = known else { return "Unknown" }
-        if raw.contains("business") || raw.contains("team") || raw.contains("enterprise") {
-            let tier = raw.contains("enterprise") ? "Enterprise" : "Business"
-            return "\(tier) · \(raw.contains("pro") ? "Premium" : "Standard")"
-        }
-        switch raw {
-        case "prolite": return "Pro Lite"
-        default: return raw.prefix(1).uppercased() + raw.dropFirst()
-        }
-    }
-}
-
-struct HealthStatus {
+struct HealthStatus: Equatable {
     let title: String
     let value: String
     let color: NSColor
@@ -64,18 +27,18 @@ struct ResetHistoryEntry: Codable {
     let detail: String
 }
 
-enum RouteBCapabilityState {
+enum RouteBCapabilityState: Equatable {
     case ready
     case testRequired
     case blocked
 }
 
-struct RouteBCapability {
+struct RouteBCapability: Equatable {
     let label: String
     let state: RouteBCapabilityState
 }
 
-struct RouteBProviderProfile {
+struct RouteBProviderProfile: Equatable {
     let id: String
     let name: String
     let provider: String
@@ -113,84 +76,7 @@ let routeBProviderProfiles = [
     )
 ]
 
-struct ResetCredit: Equatable {
-    let id: String
-    let title: String
-    let resetType: String
-    let status: String
-    let grantedAt: Date?
-    let expiresAt: Date?
-}
-
-struct ResetCreditsSnapshot: Equatable {
-    let availableCount: Int?
-    let credits: [ResetCredit]
-    let lastUpdatedText: String
-    let lastError: String?
-
-    var availableCredits: [ResetCredit] {
-        credits.filter { $0.status.lowercased() == "available" }
-    }
-
-    var displayCount: Int? {
-        availableCount ?? (credits.isEmpty ? nil : availableCredits.count)
-    }
-}
-
-struct UsageLimitWindowSnapshot: Equatable {
-    let remainingPercent: Int
-    let resetAt: Date?
-}
-
-struct DirectUsageSnapshot: Equatable {
-    let fiveHour: UsageLimitWindowSnapshot
-    let weekly: UsageLimitWindowSnapshot
-    var planType: String? = nil
-}
-
-struct ResetConsumeReceipt {
-    let code: String
-    let windowsReset: Int
-    let message: String
-}
-
-struct ResetVerificationOutcome {
-    let resetSnapshot: ResetCreditsSnapshot?
-    let usageSnapshot: DirectUsageSnapshot?
-    let creditConfirmed: Bool
-    let usageConfirmed: Bool
-    let attempts: Int
-    let detail: String
-}
-
-enum UsageDisplayMode: String {
-    case fiveHour
-    case weekly
-    case both
-    case off
-}
-
-enum ToolbarDisplayStyle: String {
-    case detailed
-    case compact
-}
-
-enum AutoSwitchMode: String {
-    case off
-    case ask
-    case threshold
-    case zero
-}
-
-enum AutoResumeMode: String {
-    case off
-    case ask
-    case idle5
-    case idle10
-    case always
-}
-
-enum AccountPanelMode {
+enum AccountPanelMode: Equatable {
     case usage
     case analytics
     case settings
@@ -280,17 +166,13 @@ struct PanelTheme {
     }
 
     // Vitesse palette (antfu/vitesse-theme): flat surfaces, warm text, green accent.
-    // Text
     var primaryText: NSColor { isDark ? Self.rgb(0xCECABE) : Self.rgb(0x393A34) }
     var secondaryText: NSColor { isDark ? Self.rgb(0x888888) : Self.rgb(0x6F6F68) }
     var tertiaryText: NSColor { isDark ? Self.rgb(0x888888, 0.72) : Self.rgb(0x393A34, 0.45) }
 
-    // Surface
     var panelTint: NSColor { isDark ? Self.rgb(0x0E0E0E) : Self.rgb(0xFFFFFF) }
     var panelEdge: NSColor { isDark ? Self.rgb(0xFFFFFF, 0.10) : Self.rgb(0x000000, 0.12) }
-    var panelHighlight: NSColor { isDark ? NSColor.white : NSColor.white }
 
-    // Tiles, hairlines and controls
     var tileFill: NSColor { isDark ? Self.rgb(0x121212) : Self.rgb(0xF7F7F7) }
     var tileHoverFill: NSColor { isDark ? Self.rgb(0x171717) : Self.rgb(0xEEEEEE) }
     var tileBorder: NSColor { isDark ? Self.rgb(0xFFFFFF, 0.06) : Self.rgb(0x000000, 0.06) }
@@ -305,7 +187,6 @@ struct PanelTheme {
     var switchOff: NSColor { isDark ? Self.rgb(0xFFFFFF, 0.18) : Self.rgb(0x000000, 0.14) }
     var accent: NSColor { isDark ? Self.rgb(0x4D9375) : Self.rgb(0x1C6B48) }
 
-    // Semantic colours: `color` for graphics, `text` for readable text
     var blueText: NSColor { text(.blue) }
 
     func color(_ tone: Tone) -> NSColor {
@@ -341,30 +222,4 @@ struct PanelTheme {
         if percent >= 20 { return .orange }
         return .red
     }
-}
-
-enum ResetCreditsFetchResult {
-    case success(ResetCreditsSnapshot)
-    case failure(String)
-}
-
-enum ResetCreditRedemptionResult {
-    case success(ResetConsumeReceipt)
-    case failure(String)
-}
-
-enum DirectUsageFetchResult {
-    case success(DirectUsageSnapshot)
-    case failure(String)
-}
-
-struct SavedAccountAuth {
-    let email: String
-    let accessToken: String
-    let accountID: String
-}
-
-enum SavedAccountAuthResult {
-    case success(SavedAccountAuth)
-    case failure(String)
 }

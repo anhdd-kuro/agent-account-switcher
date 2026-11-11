@@ -18,49 +18,6 @@ struct AnalyticsRates: Equatable {
     }
 }
 
-/// Usage of one priced row plus the observed request subsets that carry premiums (spec §6).
-/// Bucket rows only fill the tier subsets; session rows also fill the long-context ones.
-struct AnalyticsUsageDetail: Codable, Equatable {
-    var counts = AnalyticsCounts()
-    var priority = AnalyticsCounts()
-    var ultrafast = AnalyticsCounts()
-    var long = AnalyticsCounts()
-    var priorityLong = AnalyticsCounts()
-    var ultrafastLong = AnalyticsCounts()
-
-    init() {}
-
-    init(bucket: AnalyticsBucket) {
-        counts = bucket.counts
-        priority = bucket.priority
-        ultrafast = bucket.ultrafast
-    }
-
-    mutating func add(_ delta: AnalyticsCounts, tier: AnalyticsTier?, isLong: Bool) {
-        counts.add(delta)
-        if isLong { long.add(delta) }
-        switch tier {
-        case .priority:
-            priority.add(delta)
-            if isLong { priorityLong.add(delta) }
-        case .ultrafast:
-            ultrafast.add(delta)
-            if isLong { ultrafastLong.add(delta) }
-        case nil:
-            break
-        }
-    }
-
-    mutating func add(_ other: AnalyticsUsageDetail) {
-        counts.add(other.counts)
-        priority.add(other.priority)
-        ultrafast.add(other.ultrafast)
-        long.add(other.long)
-        priorityLong.add(other.priorityLong)
-        ultrafastLong.add(other.ultrafastLong)
-    }
-}
-
 /// Port of TokenTracker's pricing matcher and `computeRowCost` (spec §6), USD only.
 final class AnalyticsPricing {
     private let exact: [String: AnalyticsRates]
@@ -203,43 +160,20 @@ final class AnalyticsPricing {
 
     // MARK: Cost (pricing/index.js computeRowCost)
 
-    /// USD for one row; nil rates (unpriced) cost 0.
-    func cost(source: AnalyticsSource, model: String, usage: AnalyticsUsageDetail) -> Double {
-        guard let p = rates(model: model, source: source) else { return 0 }
-        let t = usage.counts
-        let codex = source == .codex
-        let reasoningCost = codex ? 0 : Double(t.reasoning) * p.output
-        let base = (Double(t.input) * p.input + Double(t.output) * p.output + Double(t.cached) * p.cacheRead
-            + Double(t.cacheCreation) * p.cacheWrite + reasoningCost) / 1_000_000
-        // Reasoning/speed suffixes (`gpt-5.6-high`, `-fast`) name the same model, so they keep its long-context tier.
-        let lowered = Self.stripReasoningSuffix(model.lowercased())
-        let usesLong = lowered == "gpt-5.6" || ["gpt-5.6-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6.1-sol"].contains { lowered.contains($0) }
-        let hasPriority = p.priorityMultiplier > 1
-        let hasUltrafast = p.ultrafastMultiplier > 1
-        guard usesLong || hasPriority || hasUltrafast else { return base }
-        func bounded(_ value: Int, _ total: Int) -> Double { Double(min(max(0, value), max(0, total))) }
-        let longIn = bounded(usage.long.input, t.input)
-        let longCached = bounded(usage.long.cached, t.cached)
-        let longWrite = bounded(usage.long.cacheCreation, t.cacheCreation)
-        let longOut = bounded(usage.long.output, t.output)
-        let longReasoning = codex ? 0 : bounded(usage.long.reasoning, t.reasoning)
-        let longPremium = usesLong
-            ? (longIn * p.input + longCached * p.cacheRead + longWrite * p.cacheWrite + 0.5 * longOut * p.output + 0.5 * longReasoning * p.output) / 1_000_000
-            : 0
-        func premium(_ multiplier: Double, _ tier: AnalyticsCounts, _ tierLong: AnalyticsCounts) -> Double {
-            guard multiplier > 1 else { return 0 }
-            let input = bounded(tier.input, t.input), cached = bounded(tier.cached, t.cached)
-            let write = bounded(tier.cacheCreation, t.cacheCreation), output = bounded(tier.output, t.output)
-            let reasoning = codex ? 0 : bounded(tier.reasoning, t.reasoning)
-            let tierBase = (input * p.input + cached * p.cacheRead + write * p.cacheWrite + output * p.output + reasoning * p.output) / 1_000_000
-            guard usesLong else { return (multiplier - 1) * tierBase }
-            func both(_ value: Int, _ a: Double, _ b: Double) -> Double { bounded(value, Int(min(a, b))) }
-            let tierLong = (both(tierLong.input, input, longIn) * p.input + both(tierLong.cached, cached, longCached) * p.cacheRead
-                + both(tierLong.cacheCreation, write, longWrite) * p.cacheWrite + 0.5 * both(tierLong.output, output, longOut) * p.output
-                + 0.5 * both(tierLong.reasoning, reasoning, longReasoning) * p.output) / 1_000_000
-            return (multiplier - 1) * (tierBase + tierLong)
+    func cost(source: AnalyticsSource, model: String, bucket: AnalyticsBucket) -> Double {
+        guard let rates = rates(model: model, source: source) else { return 0 }
+        let counts = bucket.counts
+        func cost(_ subset: AnalyticsCounts) -> Double {
+            let input = Double(min(max(0, subset.input), max(0, counts.input)))
+            let output = Double(min(max(0, subset.output), max(0, counts.output)))
+            let cached = Double(min(max(0, subset.cached), max(0, counts.cached)))
+            let write = Double(min(max(0, subset.cacheCreation), max(0, counts.cacheCreation)))
+            // Codex reasoning is already included in output; Claude reports it separately.
+            let reasoning = source == .codex ? 0 : Double(min(max(0, subset.reasoning), max(0, counts.reasoning)))
+            return (input * rates.input + output * rates.output + cached * rates.cacheRead
+                    + write * rates.cacheWrite + reasoning * rates.output) / 1_000_000
         }
-        return base + longPremium + premium(p.priorityMultiplier, usage.priority, usage.priorityLong)
-            + premium(p.ultrafastMultiplier, usage.ultrafast, usage.ultrafastLong)
+        return cost(counts) + max(0, rates.priorityMultiplier - 1) * cost(bucket.priority)
+            + max(0, rates.ultrafastMultiplier - 1) * cost(bucket.ultrafast)
     }
 }

@@ -1,6 +1,6 @@
 import Foundation
 
-struct AnalyticsClaudeCursor: Codable {
+struct AnalyticsClaudeCursor: Codable, AnalyticsLogCursor {
     var inode: UInt64
     var size: Int64
     var mtime: Double
@@ -10,11 +10,9 @@ struct AnalyticsClaudeCursor: Codable {
     /// Read position inside an oversized record being discarded (see `AnalyticsLines.streamRecords`).
     var discardingFrom: Int64?
 
-    var readPosition: Int64 { discardingFrom ?? offset }
     var cwd: String?
     var cwdChecked = false
     var projectKey: String?
-    var session = AnalyticsClaudeSession()
 }
 
 enum AnalyticsClaudeEvent {
@@ -23,7 +21,6 @@ enum AnalyticsClaudeEvent {
     case usage(key: String?, model: String, halfHour: Int64, delta: AnalyticsCounts)
 }
 
-/// `parseClaudeFile` (spec §2.3) plus the session collector, over the new bytes of one transcript.
 /// Dedup is applied later, serially, because the message-id set is global across files.
 struct AnalyticsClaudeParser {
     var cursor: AnalyticsClaudeCursor
@@ -53,28 +50,14 @@ struct AnalyticsClaudeParser {
     mutating func consume(_ line: AnalyticsLine) {
         let maybeUser = line.contains("\"type\":\"user\"")
         let maybeUsage = line.contains("\"usage\"")
-        let maybeAssistant = line.contains("\"type\":\"assistant\"")
-        guard maybeUser || maybeUsage || maybeAssistant else {
-            if !line.hasPrefix("{\"type\":\"file-history-snapshot\""),
-               let stamp = line.firstStringValue(after: "\"timestamp\":\""), let seconds = AnalyticsTime.parse(stamp) {
-                cursor.session.bounds.note(seconds)
-            }
-            return
-        }
+        guard maybeUser || maybeUsage else { return }
         guard let obj = line.jsonObject() else { return }
         let timestamp = obj.string("timestamp")
-        if let stamp = timestamp ?? obj.object("message")?.string("timestamp"), let seconds = AnalyticsTime.parse(stamp) {
-            cursor.session.bounds.note(seconds)
-        }
         let type = obj.string("type")
         if type == "user" {
             if isMainSession { noteConversation(obj, timestamp: timestamp) }
-            cursor.session.observe(obj, dedupKey: nil, usage: nil)
         }
-        let usage = maybeUsage ? countUsage(obj, timestamp: timestamp) : nil
-        if type == "assistant", obj.object("message") != nil {
-            cursor.session.observe(obj, dedupKey: Self.dedupKey(obj), usage: usage)
-        }
+        if maybeUsage { countUsage(obj, timestamp: timestamp) }
     }
 
     private mutating func noteConversation(_ obj: [String: Any], timestamp: String?) {
@@ -88,18 +71,16 @@ struct AnalyticsClaudeParser {
         events.append(.conversation(uuid: uuid, halfHour: AnalyticsTime.halfHour(seconds)))
     }
 
-    /// Records the usage event and returns its normalized counts for the session collector.
     /// Unlike upstream, `entrypoint:"sdk-ts", userType:"external"` lines are kept: that skip avoids
     /// double counting against TokenTracker's OmO source, which this port does not read, and the
     /// same markers are written by every Agent SDK host (e.g. T3 Code).
-    private mutating func countUsage(_ obj: [String: Any], timestamp: String?) -> AnalyticsCounts? {
+    private mutating func countUsage(_ obj: [String: Any], timestamp: String?) {
         let message = obj.object("message")
-        guard let usage = message?.object("usage") ?? obj.object("usage") else { return nil }
+        guard let usage = message?.object("usage") ?? obj.object("usage") else { return }
         let counts = Self.normalize(usage)
-        guard let timestamp, !counts.isZero, let seconds = AnalyticsTime.parse(timestamp) else { return counts }
+        guard let timestamp, !counts.isZero, let seconds = AnalyticsTime.parse(timestamp) else { return }
         let model = message?.trimmedString("model") ?? obj.trimmedString("model") ?? "unknown"
         events.append(.usage(key: Self.dedupKey(obj), model: model, halfHour: AnalyticsTime.halfHour(seconds), delta: counts))
-        return counts
     }
 
     /// `message.id:requestId`, else `message.id` (R:5282).

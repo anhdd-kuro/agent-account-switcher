@@ -73,7 +73,7 @@ The **Accounts** tab lists Codex and Claude Code subscription logins in separate
 ## Analytics tab (fork addition)
 
 Token usage from the local Codex and Claude Code logs (`~/.codex/sessions`, `~/.codex/archived_sessions`, `~/.claude/projects`), ported from [TokenTracker](https://github.com/xiufengsun/TokenTracker) (MIT):
-total tokens and estimated USD cost per day, week, month or the last 24 months, a 52-week heatmap, a usage trend by model, top models, a daily and per-project breakdown, and session efficiency (edit sessions, first-pass rate, cost per edit).
+total tokens and estimated USD cost per day, week, month or the last 24 months, a six-month heatmap, a usage trend by model, top models, a daily and per-project breakdown.
 
 - Logs are only read. The index lives in `~/Library/Application Support/AI Account Switcher/analytics/`; the first build reads every log (about 100 s for 14 GB), later refreshes read only new bytes.
 - Compressed Codex rollouts (`.jsonl.zst`) are decoded by a built-in zstd decoder.
@@ -121,25 +121,31 @@ You’ll need the Xcode command line tools.
 ```bash
 git clone https://github.com/anhdd-kuro/agent-account-switcher.git
 cd agent-account-switcher
-./run-tests.sh      # infrastructure and reset-logic checks
+./run-tests.sh      # infrastructure, analytics, provider and Codex checks
 ./build.sh          # builds build/AI Account Switcher.app
 ./install.sh        # copies it to /Applications
 ```
 
-`./package-release.sh` creates a verified release zip and checksum.
+[Before/after architecture](docs/diagrams/refactor-before-after.html) · [Refactor decisions](docs/untangle-decisions.md)
+
+`./package-release.sh` creates a verified release zip and checksum. `./scripts/render-panels.sh` renders every panel mode in dark and light using synthetic data.
 
 <details>
 <summary>Project layout</summary>
 
 ```text
-Sources/main.swift               App delegate, account workflows, switching and resets
-Sources/AccountPanelView.swift   The menu bar panel: Accounts, Resets, Settings
-Sources/PanelComponents.swift    Liquid Glass controls, rings, meters and menu bar glyphs
-Sources/Models.swift             Shared models and the panel theme
-Sources/AppInfrastructure.swift  Commands, networking and shared policies
-Sources/LifecycleMonitor.swift   Opens and closes the switcher alongside ChatGPT
-Tests/                           Infrastructure checks
-docs/                            The website (GitHub Pages)
+Sources/main.swift                App entry point
+Sources/AppDelegate*.swift        Lifecycle, refresh and feature workflows
+Sources/Codex*.swift              Account files, CLI, HTTP and pure domain rules
+Sources/Claude*.swift             Models, Keychain, persistence, HTTP and controller
+Sources/AccountPanelView.swift    Panel shell; feature bodies are in *PanelView.swift
+Sources/PanelModels.swift         Panel render state and callbacks
+Sources/AppPreferences.swift      Persisted settings and account labels
+Sources/Analytics*.swift          Incremental log scanning, reports and charts
+Sources/LifecycleMonitor.swift    Follows ChatGPT's application lifecycle
+Tests/                            Synthetic behavioral tests and offscreen rendering
+scripts/                          Bundle helpers and panel rendering
+docs/                             The website (GitHub Pages)
 ```
 
 </details>

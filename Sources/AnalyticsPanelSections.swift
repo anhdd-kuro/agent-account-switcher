@@ -63,7 +63,7 @@ extension AnalyticsPanelBuilder {
     private func dayToolTip(_ day: AnalyticsDay) -> String {
         var lines = [AnalyticsPanelFormat.weekdayDay(day.day), totalsToolTip(day.totals)]
         if day.totals.costUSD > 0 { lines.append("Cost ≈ \(AnalyticsPanelFormat.usd(day.totals.costUSD))") }
-        let total = max(1, day.modelTokens.values.reduce(0, +))
+        let total = max(1, day.modelTokens.values.saturatingSum { $0 })
         let models = day.modelTokens.filter { $0.value > 0 }.sorted { $0.value > $1.value }.prefix(4)
         lines += models.map { "\($0.key)  \(Int((Double($0.value) / Double(total) * 100).rounded()))%" }
         return lines.joined(separator: "\n")

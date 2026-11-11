@@ -2,34 +2,25 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TEST_BUILD_DIR="${TMPDIR:-/tmp}/codex-account-switcher-tests"
-TEST_BINARY="$TEST_BUILD_DIR/InfrastructureTests"
+TEST_BUILD_DIR="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/codex-account-switcher-tests.XXXXXX")"
+trap '/bin/rm -rf "$TEST_BUILD_DIR"' EXIT
 
-mkdir -p "$TEST_BUILD_DIR"
-ANALYTICS_ENGINE=()
-for name in Cursor State Support Models CodexParser ClaudeParser Sessions Controller Scanner SnapshotBuilder Pricing Projects Zstd; do
-  ANALYTICS_ENGINE+=("$ROOT_DIR/Sources/Analytics$name.swift")
+PURE_SOURCES=()
+for name in AppInfrastructure HTTPClient AuthenticationSupport RefreshPolicy LimitResetWatcher CodexAuthSupport CodexModels CodexUsageText UsageDateFormatters CodexAuthStore CodexClient CodexCommands CodexAuthListTable DesktopApplication AppPreferences; do
+  PURE_SOURCES+=("$ROOT_DIR/Sources/$name.swift")
 done
-ANALYTICS_ENGINE+=("$ROOT_DIR/Sources/CursorUsage.swift")
-/usr/bin/xcrun swiftc \
-  "$ROOT_DIR/Sources/AppInfrastructure.swift" \
-  "$ROOT_DIR/Sources/LimitResetWatcher.swift" \
-  "$ROOT_DIR/Sources/ClaudeResets.swift" \
-  "$ROOT_DIR/Sources/CodexAuthSupport.swift" \
-  "${ANALYTICS_ENGINE[@]}" \
-  "$ROOT_DIR/Tests/InfrastructureTests.swift" \
-  -target arm64-apple-macosx14.0 \
-  -o "$TEST_BINARY"
+for source in "$ROOT_DIR"/Sources/Analytics*.swift; do
+  [[ "$(basename "$source")" == AnalyticsPanel* ]] || PURE_SOURCES+=("$source")
+done
+PURE_SOURCES+=("$ROOT_DIR/Sources/CursorModels.swift" "$ROOT_DIR/Sources/CursorUsage.swift")
+for source in "$ROOT_DIR"/Sources/Claude*.swift; do
+  PURE_SOURCES+=("$source")
+done
 
-"$TEST_BINARY"
-
-APP_BINARY="$ROOT_DIR/build/AI Account Switcher.app/Contents/MacOS/CodexAccountSwitcher"
-if [[ ! -x "$APP_BINARY" ]]; then
-  /bin/bash "$ROOT_DIR/build.sh" >/dev/null
-fi
-RESET_RESULT="$("$APP_BINARY" --self-test-reset-logic)"
-if [[ "$RESET_RESULT" != "Reset logic self-test passed" ]]; then
-  echo "$RESET_RESULT" >&2
-  exit 1
-fi
-echo "$RESET_RESULT"
+for suite in Infrastructure Analytics Provider Codex; do
+  test_source="$ROOT_DIR/Tests/${suite}Tests.swift"
+  test_binary="$TEST_BUILD_DIR/${suite}Tests"
+  /usr/bin/xcrun swiftc "${PURE_SOURCES[@]}" "$test_source" \
+    -target arm64-apple-macosx14.0 -o "$test_binary"
+  "$test_binary"
+done

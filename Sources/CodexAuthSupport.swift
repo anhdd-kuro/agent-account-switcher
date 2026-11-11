@@ -38,17 +38,8 @@ enum CodexAuthListJSON {
 enum AccessTokenClaims {
     private static let authClaim = "https://api.openai.com/auth"
 
-    static func claims(of token: String) -> [String: Any]? {
-        let parts = token.split(separator: ".", omittingEmptySubsequences: false)
-        guard parts.count == 3 else { return nil }
-        var payload = parts[1].replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
-        payload += String(repeating: "=", count: (4 - payload.count % 4) % 4)
-        guard let data = Data(base64Encoded: payload) else { return nil }
-        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-    }
-
     static func expiry(of token: String) -> Date? {
-        guard let seconds = (claims(of: token)?["exp"] as? NSNumber)?.doubleValue, seconds.isFinite else { return nil }
+        guard let seconds = (JWTClaims.decode(token)?["exp"] as? NSNumber)?.doubleValue, seconds.isFinite else { return nil }
         return Date(timeIntervalSince1970: seconds)
     }
 
@@ -59,7 +50,7 @@ enum AccessTokenClaims {
     }
 
     static func userID(of token: String) -> String? {
-        (claims(of: token)?[authClaim] as? [String: Any])?["chatgpt_user_id"] as? String
+        (JWTClaims.decode(token)?[authClaim] as? [String: Any])?["chatgpt_user_id"] as? String
     }
 }
 
@@ -79,7 +70,6 @@ enum AuthSnapshotSync {
         expectedAccountID: String?,
         expectedUserID: String?
     ) -> Decision {
-        // A login missing either token is unusable and must never replace a saved one.
         guard let liveTokens = live?["tokens"] as? [String: Any],
               let accountID = liveTokens["account_id"] as? String, !accountID.isEmpty,
               let expectedAccountID, accountID == expectedAccountID,
@@ -97,32 +87,5 @@ enum AuthSnapshotSync {
             return .unchanged
         }
         return .copy
-    }
-}
-
-/// When a Claude login is reported as signed out. Claude Code owns the live
-/// token and renews it on its next request, so an expired or rejected token this
-/// app may not refresh is waited on rather than shown as "Sign in".
-enum ClaudeLoginPolicy {
-    enum Rejection: Equatable {
-        /// The token is not this app's to refresh.
-        case notAllowed
-        case failed(invalidGrant: Bool)
-        case refreshedButStillRejected
-    }
-
-    static let waitingMessage = "Login expired; Claude Code renews it on its next request"
-
-    /// True when the usage request should be skipped until the owner renews the token.
-    static func waitsForOwner(tokenExpired: Bool, canRefresh: Bool) -> Bool {
-        tokenExpired && !canRefresh
-    }
-
-    static func needsLogin(afterRejection rejection: Rejection) -> Bool {
-        switch rejection {
-        case .notAllowed: return false
-        case .failed(let invalidGrant): return invalidGrant
-        case .refreshedButStillRejected: return true
-        }
     }
 }

@@ -6,8 +6,7 @@ struct InfrastructureTests {
     private static var assertionCount = 0
 
     static func main() throws {
-        testResetRefreshPolicy()
-        testUsageRefreshPolicy()
+        testRefreshPolicy()
         testRateLimitBackoff()
         testLastKnownGoodSnapshotPolicy()
         try testComputerUsePluginDiscovery()
@@ -218,20 +217,12 @@ struct InfrastructureTests {
         if !condition() { failures.append(message) }
     }
 
-    private static func testResetRefreshPolicy() {
+    private static func testRefreshPolicy() {
         let now = Date(timeIntervalSince1970: 1_000)
-        expect(ResetRefreshPolicy.shouldRefresh(lastRefresh: nil, now: now, ttl: 300, force: false), "missing reset snapshot should refresh")
-        expect(!ResetRefreshPolicy.shouldRefresh(lastRefresh: now.addingTimeInterval(-299), now: now, ttl: 300, force: false), "fresh reset snapshot should stay cached")
-        expect(ResetRefreshPolicy.shouldRefresh(lastRefresh: now.addingTimeInterval(-300), now: now, ttl: 300, force: false), "expired reset snapshot should refresh")
-        expect(ResetRefreshPolicy.shouldRefresh(lastRefresh: now, now: now, ttl: 300, force: true), "forced reset refresh should bypass cache")
-    }
-
-    private static func testUsageRefreshPolicy() {
-        let now = Date(timeIntervalSince1970: 2_000)
-        expect(UsageRefreshPolicy.shouldRefresh(lastRefresh: nil, now: now, ttl: 30, force: false), "missing usage snapshot should refresh")
-        expect(!UsageRefreshPolicy.shouldRefresh(lastRefresh: now.addingTimeInterval(-29), now: now, ttl: 30, force: false), "fresh usage snapshot should stay cached")
-        expect(UsageRefreshPolicy.shouldRefresh(lastRefresh: now.addingTimeInterval(-30), now: now, ttl: 30, force: false), "expired usage snapshot should refresh")
-        expect(UsageRefreshPolicy.shouldRefresh(lastRefresh: now, now: now, ttl: 30, force: true), "forced usage refresh should bypass cache")
+        expect(RefreshPolicy.shouldRefresh(lastRefresh: nil, now: now, ttl: 300, force: false), "missing reset snapshot should refresh")
+        expect(!RefreshPolicy.shouldRefresh(lastRefresh: now.addingTimeInterval(-299), now: now, ttl: 300, force: false), "fresh reset snapshot should stay cached")
+        expect(RefreshPolicy.shouldRefresh(lastRefresh: now.addingTimeInterval(-300), now: now, ttl: 300, force: false), "expired reset snapshot should refresh")
+        expect(RefreshPolicy.shouldRefresh(lastRefresh: now, now: now, ttl: 300, force: true), "forced reset refresh should bypass cache")
     }
 
     private static func testRateLimitBackoff() {
